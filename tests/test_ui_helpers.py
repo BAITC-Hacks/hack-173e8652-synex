@@ -16,6 +16,7 @@ from moneygraph.ui.helpers import as_records, format_kzt, format_period, parse_g
 
 def test_navigation_contains_every_required_workspace() -> None:
     assert NAV_PAGES == (
+        "Agentic Loop",
         "Dashboard",
         "Network Explorer",
         "Top Nodes",
@@ -334,6 +335,21 @@ class _FakeAppClient:
             "limitations": ["Observed graph only."],
         }
 
+    def run_agentic_scan(self, *_: object, **__: object) -> dict[str, object]:
+        return {"id": "scan-1", "simulation": True, "alerts": []}
+
+    def agentic_scan(self, *_: object, **__: object) -> dict[str, object]:
+        return self.run_agentic_scan()
+
+    def propose_agentic_actions(self, *_: object, **__: object) -> dict[str, object]:
+        return {"actions": []}
+
+    def decide_agentic_action(self, *_: object, **__: object) -> dict[str, object]:
+        return {"status": "rejected"}
+
+    def agentic_audit(self, **_: object) -> list[dict[str, object]]:
+        return []
+
 
 def _button(app: AppTest, label: str):  # type: ignore[no-untyped-def]
     return next(button for button in app.button if button.label == label)
@@ -344,6 +360,8 @@ def test_streamlit_app_runs_every_workspace_and_core_interactions() -> None:
         app_path = Path(__file__).parents[1] / "src/moneygraph/ui/app.py"
         app = AppTest.from_file(app_path, default_timeout=10).run()
         assert not app.exception
+
+        app.radio[0].set_value("Dashboard").run()
         assert len(app.metric) >= 6
         assert [metric.value for metric in app.metric[:6]] == ["3", "2", "4", "1", "1", "1"]
 

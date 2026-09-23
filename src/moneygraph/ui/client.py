@@ -152,6 +152,67 @@ class APIClient:
             )
         )
 
+    def run_agentic_scan(
+        self,
+        replay_date: str,
+        *,
+        interval_minutes: int = 5,
+        limit: int = 20,
+    ) -> dict[str, Any]:
+        return _mapping(
+            self._request(
+                "POST",
+                "/api/v1/agentic/scans",
+                json={
+                    "replay_date": replay_date,
+                    "interval_minutes": interval_minutes,
+                    "limit": limit,
+                },
+            )
+        )
+
+    def agentic_scan(self, scan_id: str) -> dict[str, Any]:
+        return _mapping(self._request("GET", f"/api/v1/agentic/scans/{_gid(scan_id)}"))
+
+    def propose_agentic_actions(self, alert_id: str) -> dict[str, Any]:
+        return _mapping(
+            self._request(
+                "POST",
+                f"/api/v1/agentic/alerts/{_gid(alert_id)}/proposals",
+            )
+        )
+
+    def decide_agentic_action(
+        self,
+        action_id: str,
+        *,
+        decision: str,
+        confirmation: str | None,
+        idempotency_key: str,
+    ) -> dict[str, Any]:
+        if decision not in {"approve", "reject"}:
+            raise ValueError("decision must be approve or reject")
+        return _mapping(
+            self._request(
+                "POST",
+                f"/api/v1/agentic/actions/{_gid(action_id)}/decision",
+                json=_compact({"decision": decision, "confirmation": confirmation}),
+                headers={"Idempotency-Key": idempotency_key},
+            )
+        )
+
+    def agentic_audit(
+        self,
+        *,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> Any:
+        return self._request(
+            "GET",
+            "/api/v1/agentic/audit",
+            params={"limit": limit, "offset": offset},
+        )
+
 
 def _mapping(payload: Any) -> dict[str, Any]:
     return dict(payload) if isinstance(payload, Mapping) else {}

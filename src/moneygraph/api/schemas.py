@@ -1,8 +1,17 @@
 from __future__ import annotations
 
+from datetime import date
 from typing import Annotated, Any, Literal
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, StrictStr, field_validator
+from pydantic import (
+    AliasChoices,
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictStr,
+    field_validator,
+    model_validator,
+)
 
 OpaqueID = Annotated[StrictStr, Field(min_length=1, max_length=128)]
 
@@ -80,3 +89,20 @@ class AssistantQuery(StrictRequest):
         if len(value) != len(set(value)):
             raise ValueError("gids must be unique")
         return value
+
+
+class AgenticScanCreate(StrictRequest):
+    replay_date: date
+    interval_minutes: int = Field(default=15, ge=1, le=60)
+    limit: int = Field(default=50, ge=1, le=50)
+
+
+class AgenticDecisionRequest(StrictRequest):
+    decision: Literal["approve", "reject"]
+    confirmation: str | None = Field(default=None, max_length=32)
+
+    @model_validator(mode="after")
+    def approve_requires_exact_confirmation(self) -> AgenticDecisionRequest:
+        if self.decision == "approve" and self.confirmation != "APPROVE":
+            raise ValueError("approve requires exact confirmation: APPROVE")
+        return self

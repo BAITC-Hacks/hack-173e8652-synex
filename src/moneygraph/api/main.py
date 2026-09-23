@@ -22,7 +22,7 @@ from moneygraph.api.errors import (
     request_id,
     validation_error_handler,
 )
-from moneygraph.api.routes import analytics, assistant, health, investigations, runs
+from moneygraph.api.routes import agentic, analytics, assistant, health, investigations, runs
 from moneygraph.api.settings import APISettings
 from moneygraph.services.artifacts import ArtifactUnavailableError
 
@@ -54,7 +54,7 @@ def create_app(settings: APISettings | None = None) -> FastAPI:
         allow_origins=list(resolved.cors_origins),
         allow_credentials=False,
         allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
-        allow_headers=["Content-Type", "X-Request-ID"],
+        allow_headers=["Content-Type", "X-Request-ID", "Idempotency-Key"],
         expose_headers=["X-Request-ID"],
     )
 
@@ -106,6 +106,7 @@ def create_app(settings: APISettings | None = None) -> FastAPI:
     application.include_router(runs.router)
     application.include_router(investigations.router)
     application.include_router(assistant.router)
+    application.include_router(agentic.router)
     return application
 
 

@@ -1,27 +1,57 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import io
+import json
 import math
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from datetime import UTC, date, datetime
-from typing import Any, Literal
+from typing import Any, Literal, cast
 from uuid import uuid4
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session, selectinload, sessionmaker
 
 from moneygraph.repository.models import (
+    AgenticAction,
     AuditEvent,
     Investigation,
     InvestigationNode,
     InvestigationNote,
+    MonitoringAlert,
+    MonitoringScan,
     PipelineRun,
     RunNodeSnapshot,
 )
 
 INVESTIGATION_STATUSES = frozenset({"new", "in_review", "escalated", "closed"})
 RUN_STATUSES = frozenset({"running", "completed", "failed"})
+ALLOWED_AGENTIC_ACTIONS = frozenset(
+    {"prepare_aml_review_draft", "build_money_route", "create_local_watchlist"}
+)
+AGENTIC_ACTION_ORDER = (
+    "prepare_aml_review_draft",
+    "build_money_route",
+    "create_local_watchlist",
+)
+AGENTIC_ACTION_TITLES = {
+    "prepare_aml_review_draft": "Подготовить черновик для внутренней AML-проверки",
+    "build_money_route": "Построить наблюдаемый маршрут денег",
+    "create_local_watchlist": "Создать локальный список наблюдения",
+}
+AGENTIC_AUDIT_ACTIONS = frozenset(
+    {
+        "monitor.scan_completed",
+        "alert.created",
+        "actions.proposed",
+        "action.approved",
+        "action.rejected",
+        "action.failed",
+        "tool.executed",
+    }
+)
 
 
 class InvestigationNotFoundError(LookupError):
@@ -30,6 +60,26 @@ class InvestigationNotFoundError(LookupError):
 
 class RunNotFoundError(LookupError):
     """Raised when a pipeline run identifier does not exist."""
+
+
+class MonitoringScanNotFoundError(LookupError):
+    """Raised when a monitoring scan identifier does not exist."""
+
+
+class MonitoringAlertNotFoundError(LookupError):
+    """Raised when a monitoring alert identifier does not exist."""
+
+
+class AgenticActionNotFoundError(LookupError):
+    """Raised when an agentic action identifier does not exist."""
+
+
+class AgenticStateConflictError(RuntimeError):
+    """Raised when an action cannot transition from its current state."""
+
+
+class IdempotencyConflictError(RuntimeError):
+    """Raised when a key is reused for a different action or decision."""
 
 
 def _iso(value: datetime | None) -> str | None:
@@ -495,3 +545,484 @@ class MoneyGraphRepository:
             "details": event.details,
             "created_at": _iso(event.created_at),
         }
+
+    def create_monitoring_scan(
+        self,
+        *,
+        replay_date: date,
+        interval_minutes: int,
+        summary: Mapping[str, Any],
+        alerts: Sequence[Mapping[str, Any]],
+        actor: str,
+    ) -> dict[str, Any]:
+        """Persist one completed replay scan, its alerts, and transition audit atomically."""
+
+        if not 1 <= interval_minutes <= 1_440:
+            raise ValueError("interval_minutes must be between 1 and 1440")
+        scan_id = str(uuid4())
+        with self._session_factory.begin() as session:
+            session.add(
+                MonitoringScan(
+                    id=scan_id,
+                    replay_date=replay_date,
+                    interval_minutes=interval_minutes,
+                    simulation=True,
+                    status="completed",
+                    summary=_json_safe(dict(summary)),
+                    created_by=actor,
+                )
+            )
+            self._add_audit(
+                session,
+                actor=actor,
+                action="monitor.scan_completed",
+                entity_type="monitoring_scan",
+                entity_id=scan_id,
+                details={
+                    "replay_date": replay_date,
+                    "simulation": True,
+                    "alerts_created": len(alerts),
+                },
+            )
+            for alert_data in alerts:
+                alert = self._monitoring_alert_model(scan_id, alert_data)
+                session.add(alert)
+                self._add_audit(
+                    session,
+                    actor=actor,
+                    action="alert.created",
+                    entity_type="monitoring_alert",
+                    entity_id=alert.id,
+                    details={"scan_id": scan_id, "gid": alert.gid, "rule_keys": alert.rule_keys},
+                )
+        return self.get_monitoring_scan(scan_id)
+
+    @staticmethod
+    def _monitoring_alert_model(scan_id: str, alert_data: Mapping[str, Any]) -> MonitoringAlert:
+        required = {
+            "gid",
+            "rule_keys",
+            "facts",
+            "role",
+            "cluster_id",
+            "priority_score",
+            "explanation",
+        }
+        if missing := required.difference(alert_data):
+            raise ValueError(f"Monitoring alert is missing fields: {sorted(missing)}")
+        score = float(alert_data["priority_score"])
+        if not 0.0 <= score <= 1.0:
+            raise ValueError("priority_score must be between 0 and 1")
+        return MonitoringAlert(
+            id=str(uuid4()),
+            scan_id=scan_id,
+            gid=str(alert_data["gid"]),
+            status="open",
+            rule_keys=_json_safe(list(alert_data["rule_keys"])),
+            facts=_json_safe(dict(alert_data["facts"])),
+            role=str(alert_data["role"]),
+            cluster_id=str(alert_data["cluster_id"]),
+            priority_score=score,
+            explanation=str(alert_data["explanation"]),
+        )
+
+    def get_monitoring_scan(self, scan_id: str) -> dict[str, Any]:
+        with self._session_factory() as session:
+            scan = session.scalar(
+                select(MonitoringScan)
+                .where(MonitoringScan.id == scan_id)
+                .options(selectinload(MonitoringScan.alerts).selectinload(MonitoringAlert.actions))
+            )
+            if scan is None:
+                raise MonitoringScanNotFoundError(scan_id)
+            return self._scan_dict(scan)
+
+    def get_monitoring_alert(self, alert_id: str) -> dict[str, Any]:
+        with self._session_factory() as session:
+            alert = session.scalar(
+                select(MonitoringAlert)
+                .where(MonitoringAlert.id == alert_id)
+                .options(selectinload(MonitoringAlert.actions), selectinload(MonitoringAlert.scan))
+            )
+            if alert is None:
+                raise MonitoringAlertNotFoundError(alert_id)
+            result = self._alert_dict(alert)
+            result["replay_date"] = alert.scan.replay_date.isoformat()
+            return result
+
+    @classmethod
+    def _scan_dict(cls, scan: MonitoringScan) -> dict[str, Any]:
+        return {
+            "id": scan.id,
+            "replay_date": scan.replay_date.isoformat(),
+            "simulation": scan.simulation,
+            "source_time_granularity": "day",
+            "interval_minutes": scan.interval_minutes,
+            "status": scan.status,
+            "summary": scan.summary,
+            "alerts": [cls._alert_dict(alert) for alert in scan.alerts],
+            "created_by": scan.created_by,
+            "created_at": _iso(scan.created_at),
+        }
+
+    @classmethod
+    def _alert_dict(cls, alert: MonitoringAlert) -> dict[str, Any]:
+        ordered_actions = sorted(
+            alert.actions,
+            key=lambda item: AGENTIC_ACTION_ORDER.index(item.action_key),
+        )
+        severity = "critical" if len(alert.rule_keys) >= 2 else "high"
+        return {
+            "id": alert.id,
+            "scan_id": alert.scan_id,
+            "gid": alert.gid,
+            "status": alert.status,
+            "simulation": True,
+            "source_time_granularity": "day",
+            "rule_keys": list(alert.rule_keys),
+            "trigger_codes": list(alert.rule_keys),
+            "facts": dict(alert.facts),
+            "metrics": dict(alert.facts),
+            "role": alert.role,
+            "cluster_id": alert.cluster_id,
+            "priority_score": alert.priority_score,
+            "severity": severity,
+            "explanation": alert.explanation,
+            "limitations": [
+                "Источник содержит календарные даты без внутридневного времени; "
+                "признак dwell < 2 часов не вычисляется."
+            ],
+            "actions": [cls._action_dict(action) for action in ordered_actions],
+            "created_at": _iso(alert.created_at),
+        }
+
+    def create_action_proposals(
+        self,
+        *,
+        alert_id: str,
+        proposals: Sequence[Mapping[str, Any]],
+        actor: str,
+    ) -> dict[str, Any]:
+        """Create the complete allowlisted action set once for an alert."""
+
+        requested_keys = [str(proposal.get("action_key", "")) for proposal in proposals]
+        unsupported = set(requested_keys).difference(ALLOWED_AGENTIC_ACTIONS)
+        if unsupported:
+            raise ValueError(f"Unsupported agentic action: {sorted(unsupported)}")
+        if len(proposals) != 3 or set(requested_keys) != ALLOWED_AGENTIC_ACTIONS:
+            raise ValueError("Action proposals must contain exactly the three allowlisted actions")
+
+        with self._session_factory.begin() as session:
+            alert = session.scalar(
+                select(MonitoringAlert)
+                .where(MonitoringAlert.id == alert_id)
+                .options(selectinload(MonitoringAlert.actions))
+            )
+            if alert is None:
+                raise MonitoringAlertNotFoundError(alert_id)
+            if alert.actions:
+                return {
+                    "alert_id": alert_id,
+                    "score_meaning": "next_step_suitability_not_violation_probability",
+                    "actions": [self._action_dict(action) for action in alert.actions],
+                }
+
+            action_ids: list[str] = []
+            for proposal in proposals:
+                score = float(proposal["recommendation_score"])
+                if not 0.0 <= score <= 1.0:
+                    raise ValueError("recommendation_score must be between 0 and 1")
+                action_id = str(uuid4())
+                action_ids.append(action_id)
+                session.add(
+                    AgenticAction(
+                        id=action_id,
+                        alert_id=alert_id,
+                        action_key=str(proposal["action_key"]),
+                        recommendation_score=score,
+                        rationale=str(proposal["rationale"]),
+                        expected_outcome=str(proposal["expected_outcome"]),
+                        status="proposed",
+                    )
+                )
+            alert.status = "actions_proposed"
+            self._add_audit(
+                session,
+                actor=actor,
+                action="actions.proposed",
+                entity_type="monitoring_alert",
+                entity_id=alert_id,
+                details={"action_ids": action_ids, "action_keys": requested_keys},
+            )
+        stored = self.get_monitoring_alert(alert_id)
+        return {
+            "alert_id": alert_id,
+            "score_meaning": "next_step_suitability_not_violation_probability",
+            "actions": stored["actions"],
+        }
+
+    def get_agentic_action(self, action_id: str) -> dict[str, Any]:
+        with self._session_factory() as session:
+            action = session.get(AgenticAction, action_id)
+            if action is None:
+                raise AgenticActionNotFoundError(action_id)
+            return self._action_dict(action)
+
+    def decide_agentic_action(
+        self,
+        *,
+        action_id: str,
+        decision: Literal["approve", "reject"],
+        confirmation: str | None,
+        idempotency_key: str,
+        actor: str,
+        effect: Mapping[str, Any] | Callable[[], Mapping[str, Any]] | None,
+    ) -> dict[str, Any]:
+        """Record a human decision and its local effect in one database transaction."""
+
+        if decision not in {"approve", "reject"}:
+            raise ValueError("decision must be approve or reject")
+        clean_key = idempotency_key.strip()
+        if not clean_key or len(clean_key) > 128:
+            raise ValueError("idempotency_key must contain between 1 and 128 characters")
+        if decision == "approve" and confirmation != "APPROVE":
+            raise AgenticStateConflictError("Approved actions require exact confirmation APPROVE")
+        request_hash = hashlib.sha256(
+            json.dumps(
+                {"action_id": action_id, "decision": decision},
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+
+        with self._session_factory.begin() as session:
+            previous = session.scalar(
+                select(AgenticAction).where(
+                    AgenticAction.idempotency_actor == actor,
+                    AgenticAction.idempotency_key == clean_key,
+                )
+            )
+            if previous is not None:
+                if previous.request_hash != request_hash:
+                    raise IdempotencyConflictError(
+                        "Idempotency key was already used for a different decision"
+                    )
+                return self._action_dict(previous)
+
+            action = session.get(AgenticAction, action_id)
+            if action is None:
+                raise AgenticActionNotFoundError(action_id)
+            transition = cast(
+                CursorResult[Any],
+                session.execute(
+                    update(AgenticAction)
+                    .where(AgenticAction.id == action_id, AgenticAction.status == "proposed")
+                    .values(status="executing")
+                ),
+            )
+            if transition.rowcount != 1:
+                session.expire(action)
+                session.refresh(action)
+                concurrent_replay = session.scalar(
+                    select(AgenticAction).where(
+                        AgenticAction.idempotency_actor == actor,
+                        AgenticAction.idempotency_key == clean_key,
+                    )
+                )
+                if concurrent_replay is not None:
+                    if concurrent_replay.request_hash != request_hash:
+                        raise IdempotencyConflictError(
+                            "Idempotency key was already used for a different decision"
+                        )
+                    return self._action_dict(concurrent_replay)
+                raise AgenticStateConflictError(
+                    f"Action {action_id} cannot be decided from status {action.status}"
+                )
+            session.flush()
+            session.refresh(action)
+
+            now = datetime.now(UTC)
+            action.decision = decision
+            action.decided_by = actor
+            action.decided_at = now
+            action.idempotency_actor = actor
+            action.idempotency_key = clean_key
+            action.request_hash = request_hash
+            if decision == "reject":
+                action.status = "rejected"
+                action.result = {"executed": False, "reason": "rejected_by_analyst"}
+                self._add_audit(
+                    session,
+                    actor=actor,
+                    action="action.rejected",
+                    entity_type="agentic_action",
+                    entity_id=action.id,
+                    details={"action_key": action.action_key},
+                )
+            else:
+                self._add_audit(
+                    session,
+                    actor=actor,
+                    action="action.approved",
+                    entity_type="agentic_action",
+                    entity_id=action.id,
+                    details={"action_key": action.action_key, "confirmation": "APPROVE"},
+                )
+                try:
+                    with session.begin_nested():
+                        resolved_effect = effect() if callable(effect) else effect
+                        if resolved_effect is None or not isinstance(
+                            resolved_effect.get("result"), Mapping
+                        ):
+                            raise ValueError("Approved actions require a structured local effect")
+                        investigation = resolved_effect.get("investigation")
+                        if investigation is not None:
+                            if not isinstance(investigation, Mapping):
+                                raise ValueError("investigation effect must be an object")
+                            action.investigation_id = self._create_agentic_investigation(
+                                session,
+                                specification=investigation,
+                                actor=actor,
+                            )
+                        result = dict(resolved_effect["result"])
+                        if action.investigation_id:
+                            result["investigation_id"] = action.investigation_id
+                        action.result = _json_safe(result)
+                        action.status = "executed"
+                except Exception as exc:
+                    action = session.get(AgenticAction, action_id)
+                    if action is None:  # pragma: no cover - protected by the claimed row
+                        raise AgenticActionNotFoundError(action_id) from exc
+                    action.investigation_id = None
+                    action.result = {
+                        "executed": False,
+                        "error": "tool_execution_failed",
+                        "error_type": type(exc).__name__,
+                    }
+                    action.status = "failed"
+                    self._add_audit(
+                        session,
+                        actor="tool-executor",
+                        action="action.failed",
+                        entity_type="agentic_action",
+                        entity_id=action.id,
+                        details={
+                            "action_key": action.action_key,
+                            "error_type": type(exc).__name__,
+                        },
+                    )
+                else:
+                    self._add_audit(
+                        session,
+                        actor="tool-executor",
+                        action="tool.executed",
+                        entity_type="agentic_action",
+                        entity_id=action.id,
+                        details={
+                            "action_key": action.action_key,
+                            "investigation_id": action.investigation_id,
+                        },
+                    )
+        return self.get_agentic_action(action_id)
+
+    @classmethod
+    def _create_agentic_investigation(
+        cls,
+        session: Session,
+        *,
+        specification: Mapping[str, Any],
+        actor: str,
+    ) -> str:
+        title = str(specification.get("title", "")).strip()
+        if not title:
+            raise ValueError("Agentic investigation title must not be empty")
+        investigation_id = str(uuid4())
+        session.add(
+            Investigation(
+                id=investigation_id,
+                title=title,
+                description=str(specification.get("description", "")).strip(),
+                status="new",
+                run_id=None,
+                model_version=str(specification.get("model_version", "agentic-rules-v1")),
+                created_by=actor,
+            )
+        )
+        gids = list(dict.fromkeys(str(gid) for gid in specification.get("gids", [])))
+        for gid in gids:
+            session.add(
+                InvestigationNode(
+                    investigation_id=investigation_id,
+                    gid=gid,
+                    added_by=actor,
+                )
+            )
+        note_text = str(specification.get("note", "")).strip()
+        if note_text:
+            session.add(
+                InvestigationNote(
+                    id=str(uuid4()),
+                    investigation_id=investigation_id,
+                    body=note_text,
+                    analyst=actor,
+                )
+            )
+        cls._add_audit(
+            session,
+            actor=actor,
+            action="investigation.created",
+            entity_type="investigation",
+            entity_id=investigation_id,
+            details={"gids": gids, "source": "agentic_loop"},
+        )
+        # The action update references this row by FK; flush the local investigation
+        # before assigning that identifier to keep SQLite's immediate FK checks atomic.
+        session.flush()
+        return investigation_id
+
+    @staticmethod
+    def _action_dict(action: AgenticAction) -> dict[str, Any]:
+        execution_result = dict(action.result or {}) if action.status == "executed" else None
+        return {
+            "id": action.id,
+            "alert_id": action.alert_id,
+            "action_key": action.action_key,
+            "title": AGENTIC_ACTION_TITLES[action.action_key],
+            "recommendation_score": action.recommendation_score,
+            "score_meaning": "next_step_suitability_not_violation_probability",
+            "requires_human_approval": True,
+            "rationale": action.rationale,
+            "expected_outcome": action.expected_outcome,
+            "status": action.status,
+            "decision": action.decision,
+            "decided_by": action.decided_by,
+            "decided_at": _iso(action.decided_at),
+            "result": dict(action.result or {}),
+            "execution_result": execution_result,
+            "investigation_id": action.investigation_id,
+            "created_at": _iso(action.created_at),
+        }
+
+    def list_agentic_audit_events(self, *, limit: int, offset: int) -> dict[str, Any]:
+        if not 1 <= limit <= 500:
+            raise ValueError("limit must be between 1 and 500")
+        if offset < 0:
+            raise ValueError("offset must not be negative")
+        predicate = AuditEvent.action.in_(AGENTIC_AUDIT_ACTIONS)
+        with self._session_factory() as session:
+            total = int(
+                session.scalar(select(func.count()).select_from(AuditEvent).where(predicate)) or 0
+            )
+            events = session.scalars(
+                select(AuditEvent)
+                .where(predicate)
+                .order_by(AuditEvent.created_at, AuditEvent.id)
+                .offset(offset)
+                .limit(limit)
+            ).all()
+            return {
+                "items": [self._audit_dict(event) for event in events],
+                "total": total,
+                "limit": limit,
+                "offset": offset,
+            }

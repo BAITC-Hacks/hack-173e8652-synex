@@ -8,6 +8,7 @@ from fastapi import Depends, Request
 from moneygraph.api.settings import APISettings
 from moneygraph.repository.database import Database
 from moneygraph.repository.repositories import MoneyGraphRepository
+from moneygraph.services.agentic_loop import AgenticLoopService
 from moneygraph.services.artifacts import ArtifactStore
 from moneygraph.services.graph_queries import GraphQueryService
 
@@ -19,6 +20,7 @@ class AppServices:
     repository: MoneyGraphRepository
     artifacts: ArtifactStore
     graph: GraphQueryService
+    agentic: AgenticLoopService
 
 
 def build_services(settings: APISettings) -> AppServices:
@@ -32,6 +34,11 @@ def build_services(settings: APISettings) -> AppServices:
         repository=repository,
         artifacts=artifacts,
         graph=GraphQueryService(artifacts),
+        agentic=AgenticLoopService(
+            repository=repository,
+            data_dir=settings.data_dir,
+            actor=settings.analyst_name,
+        ),
     )
 
 

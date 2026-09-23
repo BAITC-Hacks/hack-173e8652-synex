@@ -21,6 +21,7 @@ api_port="${API_PORT:-8000}"
 ui_port="${UI_PORT:-8501}"
 api_url="http://127.0.0.1:${api_port}"
 ui_url="http://127.0.0.1:${ui_port}"
+agentic_replay_date="${AGENTIC_REPLAY_DATE:-}"
 tmp_base="${TMPDIR:-/tmp}"
 tmp_base="${tmp_base%/}"
 smoke_dir="$(mktemp -d "${tmp_base}/moneygraph-smoke.XXXXXX")"
@@ -100,12 +101,16 @@ ui_pid=$!
 
 wait_for_url "UI" "${ui_url}/_stcore/health"
 
-"${python_bin}" - "${api_url}" "${ui_url}" <<'PY'
+"${python_bin}" - "${api_url}" "${ui_url}" "${data_dir}" "${agentic_replay_date}" <<'PY'
 from __future__ import annotations
 
 import json
 import sys
+import uuid
+from pathlib import Path
 import urllib.request
+
+import pandas as pd
 
 
 def get_json(url: str) -> object:
@@ -115,11 +120,21 @@ def get_json(url: str) -> object:
         return json.load(response)
 
 
-def post_json(url: str, payload: dict[str, object]) -> object:
+def post_json(
+    url: str,
+    payload: dict[str, object] | None,
+    *,
+    headers: dict[str, str] | None = None,
+) -> object:
+    request_headers = dict(headers or {})
+    data = None
+    if payload is not None:
+        data = json.dumps(payload).encode("utf-8")
+        request_headers["Content-Type"] = "application/json"
     request = urllib.request.Request(
         url,
-        data=json.dumps(payload).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
+        data=data,
+        headers=request_headers,
         method="POST",
     )
     with urllib.request.urlopen(request, timeout=5) as response:
@@ -149,14 +164,47 @@ def extract_top_gids(payload: object) -> list[str]:
     return gids
 
 
-api_url, ui_url = sys.argv[1:]
+def select_agentic_replay_date(data_dir: str, override: str) -> str:
+    if override:
+        return override
+    transactions = pd.read_parquet(
+        Path(data_dir) / "transactions.parquet",
+        columns=["src", "dst", "date", "sum_kzt"],
+    )
+    transactions = transactions.assign(date=pd.to_datetime(transactions["date"]).dt.date)
+    daily = (
+        transactions.groupby(["date", "dst"], as_index=False)
+        .agg(daily_incoming_kzt=("sum_kzt", "sum"), daily_unique_payers=("src", "nunique"))
+    )
+    triggered = daily.loc[
+        (daily["daily_incoming_kzt"] > 1_000_000)
+        | (daily["daily_unique_payers"] >= 8)
+    ]
+    if triggered.empty:
+        raise RuntimeError(
+            "No calendar day triggers a deterministic monitoring rule; "
+            "set AGENTIC_REPLAY_DATE to a known demo window"
+        )
+    counts = triggered.groupby("date").size().sort_values(ascending=False)
+    return counts.index[0].isoformat()
+
+
+api_url, ui_url, data_dir, replay_override = sys.argv[1:]
 health = get_json(f"{api_url}/health")
 openapi = get_json(f"{api_url}/openapi.json")
 summary = get_json(f"{api_url}/api/v1/summary")
 top_nodes = get_json(f"{api_url}/api/v1/top-nodes?limit=2")
 
 paths = openapi.get("paths", {}) if isinstance(openapi, dict) else {}
-required_paths = {"/health", "/api/v1/summary", "/api/v1/top-nodes"}
+required_paths = {
+    "/health",
+    "/api/v1/summary",
+    "/api/v1/top-nodes",
+    "/api/v1/agentic/scans",
+    "/api/v1/agentic/alerts/{alert_id}/proposals",
+    "/api/v1/agentic/actions/{action_id}/decision",
+    "/api/v1/agentic/audit",
+}
 missing_paths = sorted(required_paths - set(paths))
 if missing_paths:
     raise RuntimeError(f"OpenAPI is missing required paths: {missing_paths}")
@@ -193,6 +241,113 @@ exported = get_json(f"{api_url}/api/v1/investigations/{investigation_id}/export"
 if not isinstance(unwrap_data(exported), dict):
     raise RuntimeError("Investigation export response must contain an object")
 
+replay_date = select_agentic_replay_date(data_dir, replay_override)
+scan_payload = post_json(
+    f"{api_url}/api/v1/agentic/scans",
+    {"replay_date": replay_date, "interval_minutes": 15, "limit": 50},
+)
+scan = unwrap_data(scan_payload)
+if not isinstance(scan, dict) or not scan.get("id"):
+    raise RuntimeError("Agentic scan response contains no id")
+alerts = scan.get("alerts")
+if not isinstance(alerts, list) or not alerts:
+    raise RuntimeError(f"Agentic scan produced no alert for replay_date={replay_date}")
+first_alert = alerts[0]
+if not isinstance(first_alert, dict) or not first_alert.get("id"):
+    raise RuntimeError("Agentic alert contains no id")
+if first_alert.get("simulation") is not True:
+    raise RuntimeError("Agentic alert must be explicitly marked as simulation")
+
+proposal_payload = post_json(
+    f"{api_url}/api/v1/agentic/alerts/{first_alert['id']}/proposals",
+    None,
+)
+proposal_data = unwrap_data(proposal_payload)
+if not isinstance(proposal_data, dict):
+    raise RuntimeError("Agentic proposal response must contain an object")
+actions = proposal_data.get("actions")
+if not isinstance(actions, list) or len(actions) != 3:
+    raise RuntimeError("Agentic proposal response must contain exactly three actions")
+actions_by_key = {
+    str(action.get("action_key")): action
+    for action in actions
+    if isinstance(action, dict) and action.get("id")
+}
+required_action_keys = {
+    "prepare_aml_review_draft",
+    "build_money_route",
+    "create_local_watchlist",
+}
+if set(actions_by_key) != required_action_keys:
+    raise RuntimeError(
+        f"Agentic actions differ from server allowlist: {sorted(actions_by_key)}"
+    )
+
+key_suffix = uuid.uuid4().hex
+rejected = unwrap_data(
+    post_json(
+        f"{api_url}/api/v1/agentic/actions/"
+        f"{actions_by_key['build_money_route']['id']}/decision",
+        {"decision": "reject"},
+        headers={"Idempotency-Key": f"smoke-reject-{key_suffix}"},
+    )
+)
+if not isinstance(rejected, dict) or rejected.get("status") != "rejected":
+    raise RuntimeError("Rejected Agentic action did not reach rejected status")
+rejected_result = rejected.get("result")
+if not isinstance(rejected_result, dict) or rejected_result.get("executed") is not False:
+    raise RuntimeError("Rejected Agentic action unexpectedly executed a tool")
+
+approve_key = f"smoke-approve-{key_suffix}"
+approve_url = (
+    f"{api_url}/api/v1/agentic/actions/"
+    f"{actions_by_key['prepare_aml_review_draft']['id']}/decision"
+)
+approved = unwrap_data(
+    post_json(
+        approve_url,
+        {"decision": "approve", "confirmation": "APPROVE"},
+        headers={"Idempotency-Key": approve_key},
+    )
+)
+replayed_approval = unwrap_data(
+    post_json(
+        approve_url,
+        {"decision": "approve", "confirmation": "APPROVE"},
+        headers={"Idempotency-Key": approve_key},
+    )
+)
+if not isinstance(approved, dict) or approved.get("status") != "executed":
+    raise RuntimeError("Approved Agentic action did not reach executed status")
+if approved != replayed_approval:
+    raise RuntimeError("Idempotent Agentic approval returned a different result")
+approved_result = approved.get("result")
+if not isinstance(approved_result, dict):
+    raise RuntimeError("Approved Agentic action contains no result object")
+if approved_result.get("submitted") is not False:
+    raise RuntimeError("AML review draft must remain local and unsubmitted")
+if approved_result.get("external_effects") not in ([], None):
+    raise RuntimeError("AML review draft reported an external side effect")
+
+audit_payload = get_json(f"{api_url}/api/v1/agentic/audit?limit=100&offset=0")
+audit_data = unwrap_data(audit_payload)
+if not isinstance(audit_data, list):
+    raise RuntimeError("Agentic audit response must contain a list")
+audit_actions = {
+    str(event.get("action")) for event in audit_data if isinstance(event, dict)
+}
+required_audit_actions = {
+    "monitor.scan_completed",
+    "alert.created",
+    "actions.proposed",
+    "action.rejected",
+    "action.approved",
+    "tool.executed",
+}
+missing_audit_actions = sorted(required_audit_actions - audit_actions)
+if missing_audit_actions:
+    raise RuntimeError(f"Agentic audit is missing transitions: {missing_audit_actions}")
+
 with urllib.request.urlopen(f"{ui_url}/_stcore/health", timeout=5) as response:
     if response.status != 200:
         raise RuntimeError(f"UI health returned HTTP {response.status}")
@@ -200,4 +355,11 @@ with urllib.request.urlopen(f"{ui_url}/_stcore/health", timeout=5) as response:
 print(f"API smoke passed: {api_url}")
 print(f"UI smoke passed: {ui_url}")
 print(f"Investigation smoke passed: id={investigation_id}")
+print(
+    "Agentic smoke passed: "
+    f"replay_date={replay_date}, alerts={len(alerts)}, "
+    f"rejected={actions_by_key['build_money_route']['id']}, "
+    f"executed={actions_by_key['prepare_aml_review_draft']['id']}, "
+    f"audit_events={len(audit_data)}"
+)
 PY

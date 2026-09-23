@@ -9,8 +9,10 @@ import streamlit as st
 from moneygraph.ui.client import APIClient, APIClientError
 from moneygraph.ui.helpers import bool_from_env
 from moneygraph.ui.pages import render_page
+from moneygraph.ui.theme import THEME_CSS, brand_markup
 
 NAV_PAGES = (
+    "Agentic Loop",
     "Dashboard",
     "Network Explorer",
     "Top Nodes",
@@ -38,30 +40,18 @@ def _api_url() -> str:
 
 
 def _inject_styles() -> None:
-    st.markdown(
-        """
-        <style>
-          .block-container {padding-top: 1.5rem; padding-bottom: 3rem; max-width: 1500px;}
-          [data-testid="stMetric"] {background: rgba(30, 41, 59, .06); border: 1px solid
-            rgba(100, 116, 139, .22); padding: .85rem; border-radius: 14px;}
-          .mg-hero {padding: 1.25rem 1.5rem; border-radius: 18px; margin-bottom: 1.2rem;
-            background: linear-gradient(120deg,#0f172a,#1d4ed8); color: white;}
-          .mg-hero h1 {margin:0; font-size:2rem;}
-          .mg-hero p {margin:.45rem 0 0; opacity:.86;}
-          .mg-label {font-size:.78rem; text-transform:uppercase; letter-spacing:.08em;
-            color:#64748b; font-weight:700;}
-          div[data-testid="stDataFrame"] {border:1px solid rgba(100,116,139,.2);
-            border-radius:12px; overflow:hidden;}
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
+    st.markdown(THEME_CSS, unsafe_allow_html=True)
 
 
 def _sidebar(client: APIClient, *, ai_enabled: bool, ai_provider: str) -> str:
     with st.sidebar:
-        st.markdown("### MoneyGraph AML")
-        st.caption("Объяснимая навигация по графу переводов")
+        st.markdown(
+            brand_markup(
+                product_name="MoneyGraph AML",
+                descriptor="Graph intelligence",
+            ),
+            unsafe_allow_html=True,
+        )
         page = st.radio("Рабочая область", NAV_PAGES, label_visibility="collapsed")
         st.divider()
         try:

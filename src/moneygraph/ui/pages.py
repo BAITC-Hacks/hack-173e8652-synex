@@ -8,6 +8,7 @@ from typing import Any
 import pandas as pd
 import streamlit as st
 
+from moneygraph.ui.agentic import render_agentic_loop
 from moneygraph.ui.client import APIClient, APIClientError
 from moneygraph.ui.graph import build_ego_figure
 from moneygraph.ui.helpers import (
@@ -28,6 +29,7 @@ def render_page(
     ai_notice: str,
 ) -> None:
     renderers: dict[str, Callable[[], None]] = {
+        "Agentic Loop": lambda: render_agentic_loop(client),
         "Dashboard": lambda: render_dashboard(client),
         "Network Explorer": lambda: render_network_explorer(client),
         "Top Nodes": lambda: render_top_nodes(client),
@@ -41,7 +43,7 @@ def render_page(
             notice=ai_notice,
         ),
     }
-    renderers.get(page, renderers["Dashboard"])()
+    renderers.get(page, renderers["Agentic Loop"])()
 
 
 def _hero(title: str, subtitle: str) -> None:
@@ -121,9 +123,9 @@ def _dashboard_roles(summary: Mapping[str, Any]) -> None:
         frame = pd.DataFrame(
             {"role": list(map(str, distribution.keys())), "count": list(distribution.values())}
         ).set_index("role")
-        st.bar_chart(frame, color="#2563eb")
+        st.bar_chart(frame, color="#197367")
     elif isinstance(distribution, list) and distribution:
-        st.bar_chart(pd.DataFrame(distribution).set_index("role"), color="#2563eb")
+        st.bar_chart(pd.DataFrame(distribution).set_index("role"), color="#197367")
     else:
         st.caption("Распределение появится после завершения pipeline.")
 
