@@ -131,6 +131,66 @@ def test_health_is_independent_of_artifacts_and_ai(tmp_path: Path) -> None:
     assert response.json()["data"]["status"] == "ok"
 
 
+def test_health_remains_live_when_an_artifact_is_corrupt(tmp_path: Path) -> None:
+    out_dir, artifacts_dir, data_dir = _write_artifacts(tmp_path)
+    (artifacts_dir / "node_features.parquet").write_bytes(b"not a parquet file")
+    settings = APISettings(
+        database_url=f"sqlite:///{tmp_path / 'corrupt-health.db'}",
+        data_dir=data_dir,
+        out_dir=out_dir,
+        artifacts_dir=artifacts_dir,
+        agentic_auto_monitor_enabled=False,
+    )
+
+    with TestClient(create_app(settings), raise_server_exceptions=False) as test_client:
+        response = test_client.get("/health")
+
+    assert response.status_code == 200
+    assert response.json()["data"]["status"] == "ok"
+    assert response.json()["data"]["artifacts"] == "pending"
+
+
+@pytest.mark.parametrize(
+    ("enabled", "key", "expected_provider"),
+    [
+        ("false", "fixture-key", None),
+        ("true", "", None),
+        ("true", "fixture-key", "openai"),
+    ],
+)
+def test_health_reports_constructed_agentic_narrative_without_credentials(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    enabled: str,
+    key: str,
+    expected_provider: str | None,
+) -> None:
+    monkeypatch.setenv("AI_ENABLED", enabled)
+    monkeypatch.setenv("AI_PROVIDER", "openai")
+    monkeypatch.setenv("OPENAI_API_KEY", key)
+    monkeypatch.setenv("OPENAI_MODEL", "fixture-model")
+    settings = APISettings(
+        database_url=f"sqlite:///{tmp_path / 'health.db'}",
+        data_dir=tmp_path / "missing-data",
+        out_dir=tmp_path / "missing-out",
+        artifacts_dir=tmp_path / "missing-artifacts",
+        agentic_auto_monitor_enabled=False,
+    )
+    with TestClient(create_app(settings)) as test_client:
+        # The health response must describe the already-constructed API service.
+        monkeypatch.setenv("AI_ENABLED", "false" if enabled == "true" else "true")
+        response = test_client.get("/health")
+
+    assert response.status_code == 200
+    assert response.json()["data"]["status"] == "ok"
+    assert response.json()["data"]["agentic_narrative_enabled"] is (
+        expected_provider is not None
+    )
+    assert response.json()["data"]["agentic_narrative_provider"] == expected_provider
+    assert "fixture-key" not in response.text
+    assert "fixture-model" not in response.text
+
+
 def test_node_graph_summary_and_cluster_endpoints(client: TestClient) -> None:
     summary = client.get("/api/v1/summary")
     node = client.get(f"/api/v1/nodes/{GID_A}")

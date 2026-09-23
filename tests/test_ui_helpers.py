@@ -218,6 +218,55 @@ def test_ai_disabled_notice_is_clear_about_offline_fallback() -> None:
     assert "api-ключ" not in notice.lower()
 
 
+def test_sidebar_ai_status_uses_api_health_not_streamlit_environment() -> None:
+    class LiveAIClient(_FakeAppClient):
+        def health(self) -> dict[str, object]:
+            return {
+                "status": "ok",
+                "agentic_narrative_enabled": True,
+                "agentic_narrative_provider": "openai",
+            }
+
+    app_path = Path(__file__).parents[1] / "src/moneygraph/ui/app.py"
+    with (
+        patch("moneygraph.ui.client.APIClient", LiveAIClient),
+        patch.dict("os.environ", {"AI_ENABLED": "false", "AI_PROVIDER": "fallback"}),
+    ):
+        app = AppTest.from_file(app_path, default_timeout=10).run()
+
+    assert not app.exception
+    assert any("AI: openai" in info.value for info in app.info)
+
+
+def test_sidebar_ai_status_does_not_claim_ai_from_streamlit_environment() -> None:
+    app_path = Path(__file__).parents[1] / "src/moneygraph/ui/app.py"
+    with (
+        patch("moneygraph.ui.client.APIClient", _FakeAppClient),
+        patch.dict("os.environ", {"AI_ENABLED": "true", "AI_PROVIDER": "openai"}),
+    ):
+        app = AppTest.from_file(app_path, default_timeout=10).run()
+
+    assert not app.exception
+    assert any("AI: offline fallback" in item.value for item in app.caption)
+
+
+def test_api_start_hint_uses_local_python_and_loopback() -> None:
+    class UnavailableSummaryClient(_FakeAppClient):
+        def summary(self) -> dict[str, object]:
+            raise APIClientError("API unavailable")
+
+    app_path = Path(__file__).parents[1] / "src/moneygraph/ui/app.py"
+    with patch("moneygraph.ui.client.APIClient", UnavailableSummaryClient):
+        app = AppTest.from_file(app_path, default_timeout=10).run()
+        app.radio[0].set_value("Dashboard").run()
+
+    assert not app.exception
+    messages = " ".join(info.value for info in app.info)
+    assert ".venv/bin/python -m uvicorn" in messages
+    assert "--host 127.0.0.1" in messages
+    assert "0.0.0.0" not in messages
+
+
 class _FakeAppClient:
     def __init__(self, *_: object, **__: object) -> None:
         self.base_url = "http://fake-api"

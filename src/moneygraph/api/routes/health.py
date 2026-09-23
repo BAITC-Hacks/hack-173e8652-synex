@@ -3,7 +3,6 @@ from __future__ import annotations
 from fastapi import APIRouter
 
 from moneygraph.api.dependencies import ServicesDependency
-from moneygraph.services.artifacts import ArtifactUnavailableError
 
 router = APIRouter(tags=["health"])
 
@@ -15,7 +14,7 @@ def health(services: ServicesDependency) -> dict[str, object]:
     try:
         services.artifacts.refresh()
         artifacts_status = "available"
-    except ArtifactUnavailableError:
+    except Exception:
         artifacts_status = "pending"
     return {
         "data": {
@@ -23,5 +22,7 @@ def health(services: ServicesDependency) -> dict[str, object]:
             "database": "available",
             "artifacts": artifacts_status,
             "ai_required": False,
+            "agentic_narrative_enabled": services.agentic.narrative_enabled,
+            "agentic_narrative_provider": services.agentic.narrative_provider_name,
         }
     }

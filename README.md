@@ -22,7 +22,7 @@
 - FastAPI: summary, runs, top nodes, node profile, ego, upstream/downstream traces, common receivers, clusters, resilience, investigations, assistant и Agentic API.
 - Streamlit UI: основной четырёхвкладочный Agentic workspace плюс dashboard, top priorities, node explorer, clusters, investigations и AI Copilot.
 - Optional AI layer: OpenAI или NVIDIA NIM через env; по умолчанию безопасный deterministic fallback без сети.
-- Human-in-the-Loop: нет автоматических block/freeze/send; approve требует `APPROVE`, повтор защищён idempotency key, локальный AML draft никуда не отправляется.
+- Human-in-the-Loop: нет автоматических block/freeze/send; в UI требуется явный чекбокс и клик, API проверяет подтверждение, повтор защищён idempotency key, локальный AML draft никуда не отправляется.
 - Dockerfile и Docker Compose с non-root user, loopback ports, read-only containers, dropped capabilities.
 
 ## Быстрый запуск
@@ -32,29 +32,25 @@
 .venv/bin/python -m pip install -e ".[dev,ai]"
 PYTHON=.venv/bin/python make analyze
 .venv/bin/python scripts/verify_outputs.py --out ./out --expected-nodes 2248
-DATA_DIR=./data OUT_DIR=./out ARTIFACTS_DIR=./artifacts DATABASE_URL=sqlite:///./moneygraph.db \
-  AGENTIC_AUTO_MONITOR_ENABLED=true \
-  .venv/bin/uvicorn moneygraph.api.main:app --host 127.0.0.1 --port 8000
-MONEYGRAPH_API_URL=http://127.0.0.1:8000 \
-  .venv/bin/streamlit run src/moneygraph/ui/app.py --server.address 127.0.0.1 --server.port 8501
+PYTHON=.venv/bin/python make dev
 ```
 
-API: http://127.0.0.1:8000  
-Swagger: http://127.0.0.1:8000/docs  
+API: http://127.0.0.1:8000
+Swagger: http://127.0.0.1:8000/docs
 UI: http://127.0.0.1:8501
 
 ## Быстрое Agentic-демо
 
-В UI открыть `Agentic Loop` и пройти четыре вкладки:
+В UI открыть `Agentic Loop`: первым появляется автоматически выбранный приоритетный кейс из всех обработанных дней, с фактами и тремя подготовленными действиями. Даты, ID узлов и запросы вручную вводить не нужно. Четыре вкладки раскрывают ход проверки:
 
-1. увидеть, как сервис сам проходит даты исходного файла и заполняет ленту; ручной replay доступен для повторной проверки;
+1. увидеть, как сервис сам проходит даты исходного файла и заполняет очередь; ручной replay скрыт в диагностическом блоке;
 2. открыть alert и проверить факты/ограничения;
 3. увидеть три уже подготовленных безопасных предложения;
-4. отклонить одно, другое явно подтвердить и показать audit receipt.
+4. отклонить одно, другое явно подтвердить одним чекбоксом и кликом, затем показать audit receipt.
 
-`make dev` и Docker Compose включают автономный demo replay по умолчанию. API без этих команд включает его через `AGENTIC_AUTO_MONITOR_ENABLED=true`; скорость показа задаёт `AGENTIC_AUTO_MONITOR_CADENCE_SECONDS=2`. Сервис проходит каждую доступную дату один раз, сохраняет прогресс в SQLite и проверяет источник на новые даты. UI обновляет ленту каждые три секунды.
+Автономный demo replay включён по умолчанию и при обычном запуске API; `AGENTIC_AUTO_MONITOR_ENABLED=false` отключает его явно. Скорость показа задаёт `AGENTIC_AUTO_MONITOR_CADENCE_SECONDS=2`. Сервис проходит каждую доступную дату один раз, сохраняет прогресс в SQLite и проверяет источник на новые даты. UI обновляет очередь каждые три секунды.
 
-Для настоящих LLM-пояснений скопируйте `.env.example` в локальный `.env` и задайте `AI_ENABLED=true`, `AI_PROVIDER=openai`, `OPENAI_API_KEY` и `OPENAI_MODEL` (либо `AI_PROVIDER=nvidia`, `NVIDIA_API_KEY`, `NVIDIA_MODEL`). `.env` исключён из Git; не передавайте ключ в чат и не публикуйте `docker compose config` с ним. Docker Compose читает `.env` автоматически. При прямом запуске Python экспортируйте те же переменные в окружение API-процесса. Один внешний запрос делается только для ведущего alert каждого scan; в prompt попадают лишь псевдонимный ID и разрешённые числовые признаки, не сырые операции/список плательщиков. Действия и решения остаются под контролем сервера и аналитика, ответ LLM — только пояснение. Если ключ не настроен или вызов неуспешен, работает офлайн-разбор.
+Для настоящих LLM-пояснений скопируйте `.env.example` в локальный `.env` и задайте `AI_ENABLED=true`, `AI_PROVIDER=openai`, `OPENAI_API_KEY` и `OPENAI_MODEL` (либо `AI_PROVIDER=nvidia`, `NVIDIA_API_KEY`, `NVIDIA_MODEL`). `.env` исключён из Git; не передавайте ключ в чат и не публикуйте `docker compose config` с ним. `make dev` передаёт `.env` API-процессу автоматически, если файл существует; при прямом запуске Uvicorn используйте `--env-file .env`. Один внешний запрос делается только для ведущего alert каждого scan; в prompt попадают лишь псевдонимный ID и разрешённые числовые признаки, не сырые операции/список плательщиков. Действия и решения остаются под контролем сервера и аналитика, ответ LLM — только пояснение. Если ключ не настроен или вызов неуспешен, работает офлайн-разбор.
 
 Автоматическая сквозная проверка поднимает API/UI с временной БД и проходит тот же безопасный сценарий:
 
@@ -66,8 +62,8 @@ UI: http://127.0.0.1:8501
 
 ## Проверенные результаты последнего полного запуска
 
-- Latest full-dataset pipeline (`make analyze`, project output): `5.223s`
-  internal stage total; `6.36s` wall-clock including process startup.
+- Latest full-dataset pipeline (isolated output, same `data/*.parquet`): `6.181s`
+  internal stage total; `7.52s` wall-clock including process startup.
 - Counts: `nodes=2248`, `edges=3119`, `transactions=4840`, `seed=81`.
 - CSV rows excluding header: `nodes_roles.csv=2248`, `clusters.csv=88`, `top_nodes.csv=50`.
 - Mandatory CSV hashes:
@@ -90,14 +86,13 @@ docker compose build
 docker compose run --rm --no-deps analyzer
 ```
 
-Verified status: `137 passed`, coverage `83.34%`, Ruff clean, `mypy src` clean,
+Verified status: `157 passed`, coverage `83.63%`, Ruff clean, `mypy src` clean,
 mandatory CSV verifier clean. A local API/UI live run replayed all 31 dates from
-4,840 operations into 77 alerts and 231 proposals; approve, reject, audit, and
-idempotent retry passed. One upstream Starlette/httpx deprecation warning remains.
-On the verification host, a fresh Docker rebuild failed during image extraction
-because Docker Desktop reported `read-only file system`; host free space was
-about 117 MiB at that point. The current code was verified in the local `.venv`
-instead. The older Docker containers were not used as evidence for this release.
+4,840 operations into 77 alerts and 231 proposals; a separate smoke run passed
+reject, approve, local draft execution, audit, and idempotent retry. One upstream
+Starlette/httpx deprecation warning remains. Docker was not rebuilt in this
+verification round; an earlier rebuild failed when Docker Desktop reported a
+read-only filesystem. The current code was verified in the local `.venv` instead.
 
 ## Data Caveats
 

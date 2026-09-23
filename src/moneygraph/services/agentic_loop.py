@@ -20,6 +20,7 @@ from moneygraph.repository.repositories import MoneyGraphRepository
 
 LOGGER = logging.getLogger("moneygraph.agentic_loop")
 SAFE_PROVIDER_NAME = re.compile(r"^[A-Za-z0-9_.-]{1,40}$")
+PUBLIC_NARRATIVE_PROVIDERS = frozenset({"openai", "nvidia_nim"})
 MAX_AI_NARRATIVE_LENGTH = 1_200
 ACTION_ORDER = (
     "prepare_aml_review_draft",
@@ -62,6 +63,22 @@ class AgenticLoopService:
             if enabled and not isinstance(configured, DeterministicFallbackProvider)
             else None
         )
+
+    @property
+    def narrative_enabled(self) -> bool:
+        """Whether this service has a remote narrative provider configured."""
+
+        return self._narrative_provider is not None
+
+    @property
+    def narrative_provider_name(self) -> str | None:
+        """Return the provider's non-secret identifier, if it is safe to display."""
+
+        provider = self._narrative_provider
+        if provider is None:
+            return None
+        name = provider.name
+        return name if name in PUBLIC_NARRATIVE_PROVIDERS else None
 
     def run_scan(
         self,

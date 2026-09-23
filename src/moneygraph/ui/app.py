@@ -7,7 +7,6 @@ import os
 import streamlit as st
 
 from moneygraph.ui.client import APIClient, APIClientError
-from moneygraph.ui.helpers import bool_from_env
 from moneygraph.ui.pages import render_page
 from moneygraph.ui.theme import THEME_CSS, brand_markup
 
@@ -25,7 +24,10 @@ NAV_PAGES = (
 
 def ai_status_notice(*, enabled: bool, provider: str) -> str:
     if enabled:
-        return f"AI Copilot включён: провайдер {provider}. Результаты требуют проверки аналитиком."
+        return (
+            f"AI Copilot настроен: провайдер {provider}. Доступность проверяется при запросе; "
+            "результаты требуют проверки аналитиком."
+        )
     return (
         "AI Copilot отключён. Доступен детерминированный офлайн-разбор; "
         "аналитическое ядро и все обязательные результаты продолжают работать."
@@ -43,7 +45,9 @@ def _inject_styles() -> None:
     st.markdown(THEME_CSS, unsafe_allow_html=True)
 
 
-def _sidebar(client: APIClient, *, ai_enabled: bool, ai_provider: str) -> str:
+def _sidebar(client: APIClient) -> tuple[str, bool, str]:
+    ai_enabled = False
+    ai_provider = "deterministic"
     with st.sidebar:
         st.markdown(
             brand_markup(
@@ -58,14 +62,19 @@ def _sidebar(client: APIClient, *, ai_enabled: bool, ai_provider: str) -> str:
             health = client.health()
             status = str(health.get("status", "ok"))
             st.success(f"API: {status}", icon="✅")
+            if health.get("agentic_narrative_enabled") is True:
+                provider = str(health.get("agentic_narrative_provider", ""))
+                if provider in {"openai", "nvidia_nim"}:
+                    ai_enabled = True
+                    ai_provider = provider
         except APIClientError:
             st.error("API недоступен", icon="❌")
         if ai_enabled:
-            st.info(f"AI: {ai_provider}", icon="✨")
+            st.info(f"AI: {ai_provider} настроен (вызов не проверен)", icon="✨")
         else:
             st.caption("AI: offline fallback")
         st.caption(f"API URL: `{client.base_url}`")
-    return page
+    return page, ai_enabled, ai_provider
 
 
 def main() -> None:
@@ -76,10 +85,8 @@ def main() -> None:
         initial_sidebar_state="expanded",
     )
     _inject_styles()
-    ai_enabled = bool_from_env(os.getenv("AI_ENABLED", "false"))
-    ai_provider = os.getenv("AI_PROVIDER", "fallback")
     client = APIClient(_api_url())
-    page = _sidebar(client, ai_enabled=ai_enabled, ai_provider=ai_provider)
+    page, ai_enabled, ai_provider = _sidebar(client)
     render_page(
         page,
         client,

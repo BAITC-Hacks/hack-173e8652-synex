@@ -7,7 +7,8 @@ import pandas as pd
 import pytest
 
 from moneygraph.ai.agentic_prompts import build_agentic_explanation_prompt
-from moneygraph.ai.base import AIResult
+from moneygraph.ai.base import AIProvider, AIResult
+from moneygraph.ai.deterministic_fallback import DeterministicFallbackProvider
 from moneygraph.repository.database import Database
 from moneygraph.repository.repositories import IdempotencyConflictError, MoneyGraphRepository
 from moneygraph.services.agentic_loop import AgenticLoopService, AgenticValidationError
@@ -244,7 +245,7 @@ class _NarrativeProvider:
 
 def _narrative_service(
     tmp_path: Path,
-    provider: _NarrativeProvider,
+    provider: AIProvider,
     *,
     ai_enabled: bool,
 ) -> AgenticLoopService:
@@ -257,6 +258,33 @@ def _narrative_service(
         ai_enabled=ai_enabled,
         narrative_provider=provider,
     )
+
+
+def test_narrative_status_distinguishes_configured_disabled_and_fallback(tmp_path: Path) -> None:
+    configured = _narrative_service(tmp_path, _NarrativeProvider(), ai_enabled=True)
+    disabled = _narrative_service(tmp_path, _NarrativeProvider(), ai_enabled=False)
+    fallback = _narrative_service(
+        tmp_path,
+        DeterministicFallbackProvider(),
+        ai_enabled=True,
+    )
+
+    assert configured.narrative_enabled is True
+    assert configured.narrative_provider_name is None
+    assert disabled.narrative_enabled is False
+    assert disabled.narrative_provider_name is None
+    assert fallback.narrative_enabled is False
+    assert fallback.narrative_provider_name is None
+
+
+def test_narrative_status_never_publishes_arbitrary_provider_name(tmp_path: Path) -> None:
+    class _ProviderWithSensitiveName(_NarrativeProvider):
+        name = "fixture-key"
+
+    service = _narrative_service(tmp_path, _ProviderWithSensitiveName(), ai_enabled=True)
+
+    assert service.narrative_enabled is True
+    assert service.narrative_provider_name is None
 
 
 def test_optional_llm_narrative_is_bounded_to_top_alert_and_safe_numeric_prompt(

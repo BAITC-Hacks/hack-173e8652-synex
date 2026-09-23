@@ -469,6 +469,7 @@ def _case_id(case: Mapping[str, Any]) -> str | None:
 
 def _api_start_hint() -> None:
     st.info(
-        "Запустите API командой `uvicorn moneygraph.api.main:app --host 0.0.0.0 --port 8000`, "
+        "Запустите API командой `.venv/bin/python -m uvicorn moneygraph.api.main:app "
+        "--host 127.0.0.1 --port 8000 --env-file .env`, "
         "затем обновите страницу."
     )
