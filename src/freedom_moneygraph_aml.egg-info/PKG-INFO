@@ -1,0 +1,33 @@
+Metadata-Version: 2.4
+Name: freedom-moneygraph-aml
+Version: 0.1.0
+Summary: Deterministic graph analytics workspace for AML investigation
+Requires-Python: <3.15,>=3.11
+Description-Content-Type: text/markdown
+Requires-Dist: fastapi<1.0,>=0.115
+Requires-Dist: httpx<1.0,>=0.27
+Requires-Dist: networkx<4.0,>=3.3
+Requires-Dist: numpy<3.0,>=1.26
+Requires-Dist: pandas<3.0,>=2.2
+Requires-Dist: plotly<7.0,>=5.24
+Requires-Dist: pyarrow<22,>=16
+Requires-Dist: pydantic-settings<3.0,>=2.7
+Requires-Dist: PyYAML<7.0,>=6.0
+Requires-Dist: sqlalchemy<3.0,>=2.0
+Requires-Dist: streamlit<2.0,>=1.41
+Requires-Dist: uvicorn[standard]<1.0,>=0.34
+Provides-Extra: ai
+Requires-Dist: openai<3.0,>=1.60; extra == "ai"
+Provides-Extra: dev
+Requires-Dist: mypy<2.0,>=1.14; extra == "dev"
+Requires-Dist: pandas-stubs<3.0,>=2.2; extra == "dev"
+Requires-Dist: pytest<10.0,>=8.3; extra == "dev"
+Requires-Dist: pytest-cov<8.0,>=6.0; extra == "dev"
+Requires-Dist: ruff<1.0,>=0.9; extra == "dev"
+Requires-Dist: types-PyYAML<7.0,>=6.0; extra == "dev"
+
+# Freedom MoneyGraph AML
+
+Freedom MoneyGraph AML — локальная система объяснимой графовой аналитики для приоритизации AML-проверок по обезличенной сети внутрибанковских переводов. Источник требований, методология запуска и критерии проверки зафиксированы в [`prompt.md`](prompt.md) и [`docs/implementation_plan.md`](docs/implementation_plan.md).
+
+Проект работает в режиме активной реализации; этот README будет дополнен только фактически проверенными командами, метриками и возможностями после полного запуска на предоставленных данных.
