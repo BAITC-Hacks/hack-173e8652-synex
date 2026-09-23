@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import importlib.util
 import json
 from types import SimpleNamespace
 from typing import Any
@@ -9,6 +10,24 @@ import pytest
 
 from moneygraph.ai.agentic_prompts import SAFE_ACTION_KEYS
 from moneygraph.ai.openai_provider import OpenAIProvider
+
+
+def test_sdk_readiness_reports_missing_dependency_without_network(monkeypatch: Any) -> None:
+    monkeypatch.setattr(importlib.util, "find_spec", lambda _: None)
+    provider = OpenAIProvider(api_key="placeholder", model="gpt-4o-mini")
+    assert provider.configuration_issue == "sdk_missing"
+
+
+def test_injected_client_does_not_require_optional_sdk(monkeypatch: Any) -> None:
+    monkeypatch.setattr(importlib.util, "find_spec", lambda _: None)
+    provider = OpenAIProvider(api_key="placeholder", model="gpt-4o-mini", client_factory=lambda **_: None)
+    assert provider.configuration_issue is None
+
+
+def test_installed_sdk_is_ready_without_making_requests(monkeypatch: Any) -> None:
+    monkeypatch.setattr(importlib.util, "find_spec", lambda _: object())
+    provider = OpenAIProvider(api_key="placeholder", model="gpt-4o-mini")
+    assert provider.configuration_issue is None
 
 
 def _alert() -> dict[str, Any]:

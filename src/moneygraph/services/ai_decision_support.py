@@ -10,10 +10,24 @@ from typing import Any
 from moneygraph.ai.case_assessment import validate_assessment
 
 SAFE_MODEL = re.compile(r"^[A-Za-z0-9_.:/-]{1,100}$")
-SAFE_STATUSES = frozenset({
-    "success", "cache_hit", "budget_exhausted", "in_flight", "cooldown",
-    "state_unavailable", "provider_unavailable",
-})
+SAFE_STATUSES = frozenset(
+    {
+        "success",
+        "cache_hit",
+        "budget_exhausted",
+        "in_flight",
+        "cooldown",
+        "state_unavailable",
+        "provider_unavailable",
+        "sdk_missing",
+        "authentication_failed",
+        "insufficient_quota",
+        "rate_limited",
+        "invalid_request",
+        "timeout",
+        "context_too_large",
+    }
+)
 
 
 def assess_case(provider: Any, alert: Mapping[str, Any]) -> dict[str, Any]:
@@ -26,31 +40,45 @@ def assess_case(provider: Any, alert: Mapping[str, Any]) -> dict[str, Any]:
         if not result.get("fallback"):
             assessment = validate_assessment(result.get("assessment"), alert)
             model = str(result.get("model", ""))
-            return {**alert, "facts": {**alert["facts"],
-                "ai_assessment": assessment,
-                "ai_narrative": assessment["summary"],
-                "ai_provider": "openai",
-                "ai_model": model if SAFE_MODEL.fullmatch(model) else "configured-model",
-                "ai_status": "cache_hit" if result.get("cached") else "success",
-                "ai_cached": bool(result.get("cached", False)),
-                "ai_usage": result.get("usage", {}),
-            }}
+            return {
+                **alert,
+                "facts": {
+                    **alert["facts"],
+                    "ai_assessment": assessment,
+                    "ai_narrative": assessment["summary"],
+                    "ai_provider": "openai",
+                    "ai_model": model if SAFE_MODEL.fullmatch(model) else "configured-model",
+                    "ai_status": "cache_hit" if result.get("cached") else "success",
+                    "ai_cached": bool(result.get("cached", False)),
+                    "ai_usage": result.get("usage", {}),
+                },
+            }
     except Exception:
         status = "provider_unavailable"
-    return {**alert, "facts": {**alert["facts"],
-        "ai_status": status, "ai_retry_after": time.time() + 300,
-    }}
+    now = time.time()
+    retry_after = ((int(now) // 86400 + 1) * 86400) if status == "budget_exhausted" else now + 300
+    return {
+        **alert,
+        "facts": {
+            **alert["facts"],
+            "ai_status": status,
+            "ai_retry_after": retry_after,
+        },
+    }
 
 
 def explain_proposals(
-    proposals: list[dict[str, Any]], facts: Mapping[str, Any],
+    proposals: list[dict[str, Any]],
+    facts: Mapping[str, Any],
 ) -> list[dict[str, Any]]:
     """Attach validated model rationale and exact server-side evidence values."""
     assessment = facts.get("ai_assessment")
     if not isinstance(assessment, Mapping):
         return proposals
-    indexed = {item["action_key"]: (rank, item)
-               for rank, item in enumerate(assessment.get("actions", []), 1)}
+    indexed = {
+        item["action_key"]: (rank, item)
+        for rank, item in enumerate(assessment.get("actions", []), 1)
+    }
     result = []
     for proposal in proposals:
         ranked = indexed.get(proposal["action_key"])
@@ -59,7 +87,12 @@ def explain_proposals(
             continue
         rank, item = ranked
         evidence = "; ".join(f"{key}={facts[key]}" for key in item["evidence_keys"])
-        result.append({**proposal, "rationale": (
-            f"OpenAI · вариант {rank}. {item['rationale']} Основание: {evidence}."
-        )})
-    return result
+        result.append(
+            {
+                **proposal,
+                "rationale": (
+                    f"OpenAI · вариант {rank}. {item['rationale']} Основание: {evidence}."
+                ),
+            }
+        )
+    return sorted(result, key=lambda item: indexed.get(item["action_key"], (4, {}))[0])

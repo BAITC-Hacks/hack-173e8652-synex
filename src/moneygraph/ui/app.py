@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Mapping
+from typing import Any
 
 import streamlit as st
 
+from moneygraph.ui.ai_runtime import runtime_status_view
 from moneygraph.ui.client import APIClient, APIClientError
 from moneygraph.ui.pages import render_page
 from moneygraph.ui.theme import THEME_CSS, brand_markup
@@ -48,6 +51,7 @@ def _inject_styles() -> None:
 def _sidebar(client: APIClient) -> tuple[str, bool, str]:
     ai_enabled = False
     ai_provider = "deterministic"
+    ai_runtime: Mapping[str, Any] | None = None
     with st.sidebar:
         st.markdown(
             brand_markup(
@@ -60,6 +64,9 @@ def _sidebar(client: APIClient) -> tuple[str, bool, str]:
         st.divider()
         try:
             health = client.health()
+            runtime = health.get("ai_runtime")
+            if isinstance(runtime, Mapping):
+                ai_runtime = runtime
             status = str(health.get("status", "ok"))
             st.success(f"API: {status}", icon="✅")
             if health.get("agentic_narrative_enabled") is True:
@@ -70,7 +77,11 @@ def _sidebar(client: APIClient) -> tuple[str, bool, str]:
         except APIClientError:
             st.error("API недоступен", icon="❌")
         if ai_enabled:
-            st.info(f"AI: {ai_provider} настроен (вызов не проверен)", icon="✨")
+            if ai_runtime is not None:
+                view = runtime_status_view(ai_runtime)
+                getattr(st, view["level"])(f"AI: {view['message']}")
+            else:
+                st.info(f"AI: {ai_provider} настроен; успешный вызов ещё не подтверждён.", icon="✨")
         else:
             st.caption("AI: offline fallback")
         st.caption(f"API URL: `{client.base_url}`")

@@ -106,8 +106,11 @@ def list_audit(
     services: ServicesDependency,
     limit: Annotated[int, Query(ge=1, le=500)] = 100,
     offset: Annotated[int, Query(ge=0)] = 0,
+    newest_first: bool = False,
 ) -> dict[str, Any]:
-    result = services.agentic.list_audit_events(limit=limit, offset=offset)
+    result = services.agentic.list_audit_events(
+        limit=limit, offset=offset, newest_first=newest_first
+    )
     return {
         "data": result["items"],
         "meta": {key: result[key] for key in ("total", "limit", "offset")},

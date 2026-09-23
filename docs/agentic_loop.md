@@ -8,7 +8,9 @@ AML-аналитик получает единый четырёхшаговый 
 
 - Финальное решение и ответственность всегда принадлежат аналитику.
 - Ни AI, ни rules engine не блокируют клиента, перевод и счёт и не отправляют сообщение в АФМ.
-- Core monitoring, alerts и предложения работают без LLM и без сети. Agentic Loop использует детерминированные графовые и временные правила; при `AI_ENABLED=true` внешний LLM опционально добавляет пояснение к ведущему alert каждого scan. Он получает только разрешённые числовые признаки, не меняет score, trigger codes или набор действий; ошибка провайдера оставляет офлайн-карточку рабочей. Отдельный AI Copilot также доступен в интерфейсе.
+- Core monitoring, alerts и предложения работают без LLM и без сети. При `AI_ENABLED=true`, `AI_PROVIDER=openai` и настроенном ключе OpenAI возвращает структурированную гипотезу, ограничения и обоснования трёх разрешённых действий. Ответ проходит строгую локальную проверку; реальные числовые evidence добавляет сервер. Модель не меняет scores, trigger codes или набор исполняемых инструментов. Ошибка провайдера оставляет офлайн-карточку рабочей; UI различает правила, ответ модели и кэш.
+- На каждом scan разбирается ведущий alert с priority не ниже `AGENTIC_AI_MIN_PRIORITY_SCORE` (0.55 по умолчанию). После полного replay фоновой сервис обогащает по одному оставшемуся приоритетному кейсу за шаг, включая старую очередь. Любое уже принятое решение запрещает переобогащение кейса.
+- Общий SQLite-governor для кейсов и AI Copilot ограничивает вызовы (100 в сутки UTC по умолчанию), сохраняет кэш на 24 часа, учитывает фактический token usage и подавляет конкурентные дубликаты. Таймаут OpenAI — 20 секунд, автоматических SDK-повторов нет. Это лимит вызовов, не гарантия суммы счёта провайдера.
 - Исходник имеет дневную, а не часовую гранулярность. Сигнал `dwell < 2h` недоступен и не симулируется; используется наблюдаемое перенаправление за 0–2 дня.
 - Мониторинг является честно маркированным автономным demo replay по датам июля 2026, а не заявлением о live ingestion. В Docker Compose и `make dev` scheduler включён; API можно запустить с `AGENTIC_AUTO_MONITOR_ENABLED=true`.
 - Разрешены только три server-owned action key: `prepare_aml_review_draft`, `build_money_route`, `create_local_watchlist`.
@@ -78,6 +80,11 @@ Responses use the existing `{data, meta}` envelope and structured API errors.
 ### Persistence and audit
 
 SQLite tables persist monitoring scans, alerts and action proposals/executions. Every write also appends an `audit_events` row containing actor, entity, transition and bounded JSON details. Existing investigation storage remains the destination for generated drafts and watchlists.
+
+AI-обогащение добавляет `ai.assessment_completed` или `ai.assessment_fallback`;
+метаданные содержат модель, статус, cache flag и числовой usage, без ключей или промптов.
+Отдельный `artifacts/ai_state.sqlite3` хранит ограниченный кэш и журнал резервирования
+платных запросов. Для этой версии хранилища локальные и не защищены от администратора машины.
 
 ## NON-GOALS
 

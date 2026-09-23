@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import json
 from collections.abc import Callable, Mapping
 from types import MappingProxyType
@@ -62,6 +63,12 @@ class OpenAIProvider:
     @property
     def model(self) -> str:
         return self._model
+
+    @property
+    def configuration_issue(self) -> str | None:
+        if self._client_factory is None and importlib.util.find_spec("openai") is None:
+            return "sdk_missing"
+        return None
 
     @property
     def cache_identity(self) -> str:

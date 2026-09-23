@@ -39,9 +39,7 @@ def _write_fixture_transactions(data_dir: Path, *, include_fourth_day: bool = Fa
         },
     ]
     if include_fourth_day:
-        rows.append(
-            {"src": "late", "dst": "collector", "date": "2026-07-04", "sum_kzt": 50_000.0}
-        )
+        rows.append({"src": "late", "dst": "collector", "date": "2026-07-04", "sum_kzt": 50_000.0})
     pd.DataFrame(rows).to_parquet(data_dir / "transactions.parquet", index=False)
 
 
@@ -103,6 +101,41 @@ def test_monitor_status_does_not_wait_for_remote_assessment(tmp_path: Path) -> N
         assert scan.result(timeout=2) is not None
 
 
+def test_status_counts_day_only_after_all_safe_proposals_are_persisted(tmp_path: Path) -> None:
+    """A committed scan row is not a completed feed item until its action cards exist."""
+
+    _write_fixture_transactions(tmp_path / "data")
+    monitor, _ = _build_monitor(tmp_path)
+    first = monitor.tick_once()
+    assert first is not None and first["replay_date"] == "2026-07-01"
+
+    entered, release = Event(), Event()
+    original = monitor._service.propose_actions
+
+    def paused_proposals(alert_id: str) -> dict[str, object]:
+        entered.set()
+        assert release.wait(3)
+        return original(alert_id)
+
+    monitor._service.propose_actions = paused_proposals  # type: ignore[method-assign]
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        second_tick = executor.submit(monitor.tick_once)
+        assert entered.wait(2)
+        during = monitor.status()
+        assert during["state"] == "scanning"
+        assert during["processed_days"] == 1
+        assert during["latest_scan"]["replay_date"] == "2026-07-01"
+        assert all(alert["replay_date"] != "2026-07-02" for alert in during["recent_alerts"])
+        release.set()
+        second = second_tick.result(timeout=3)
+
+    assert second is not None and second["replay_date"] == "2026-07-02"
+    assert all(len(alert["actions"]) == 3 for alert in second["alerts"])
+    after = monitor.status()
+    assert after["processed_days"] == 2
+    assert after["latest_scan"]["replay_date"] == "2026-07-02"
+
+
 def test_auto_monitor_restart_skips_persisted_days_and_picks_up_new_source_day(
     tmp_path: Path,
 ) -> None:
@@ -146,7 +179,9 @@ def test_status_prioritizes_older_high_score_then_removes_executed_case(tmp_path
     ]
     assert all(len(item["actions"]) == 3 for item in status["priority_queue"])
 
-    service = AgenticLoopService(repository, tmp_path / "data", actor="test-analyst", ai_enabled=False)
+    service = AgenticLoopService(
+        repository, tmp_path / "data", actor="test-analyst", ai_enabled=False
+    )
     service.decide_and_execute(
         older["actions"][0]["id"],
         "approve",
@@ -168,7 +203,9 @@ def test_status_keeps_case_with_remaining_proposals_after_one_rejection(tmp_path
     assert scan is not None
     alert = next(item for item in scan["alerts"] if item["gid"] == "collector")
 
-    service = AgenticLoopService(repository, tmp_path / "data", actor="test-analyst", ai_enabled=False)
+    service = AgenticLoopService(
+        repository, tmp_path / "data", actor="test-analyst", ai_enabled=False
+    )
     service.decide_and_execute(
         alert["actions"][0]["id"],
         "reject",
@@ -188,7 +225,9 @@ def test_status_uses_recency_for_equal_scores_and_excludes_alerts_without_action
     tmp_path: Path,
 ) -> None:
     monitor, repository = _build_monitor(tmp_path)
-    service = AgenticLoopService(repository, tmp_path / "data", actor="test-analyst", ai_enabled=False)
+    service = AgenticLoopService(
+        repository, tmp_path / "data", actor="test-analyst", ai_enabled=False
+    )
 
     def alert_data(gid: str, score: float) -> dict[str, object]:
         return {

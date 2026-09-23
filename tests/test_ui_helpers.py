@@ -250,6 +250,56 @@ def test_sidebar_ai_status_does_not_claim_ai_from_streamlit_environment() -> Non
     assert any("AI: offline fallback" in item.value for item in app.caption)
 
 
+@pytest.mark.parametrize("last_success", [None, "2026-09-23T12:00:00+00:00"])
+def test_sidebar_distinguishes_confirmed_model_usage_from_configuration(last_success: str | None) -> None:
+    class RuntimeClient(_FakeAppClient):
+        def health(self) -> dict[str, object]:
+            return {
+                "status": "ok",
+                "agentic_narrative_enabled": True,
+                "agentic_narrative_provider": "openai",
+                "ai_runtime": {
+                    "configured": True, "provider": "openai", "model": "gpt-4o-mini",
+                    "last_success_at": last_success, "successful_calls": 1 if last_success else 0,
+                },
+            }
+
+    app_path = Path(__file__).parents[1] / "src/moneygraph/ui/app.py"
+    with patch("moneygraph.ui.client.APIClient", RuntimeClient):
+        app = AppTest.from_file(app_path, default_timeout=10).run()
+
+    assert not app.exception
+    sidebar = app.sidebar
+    if last_success:
+        assert any("подтверждён" in item.value for item in sidebar.success)
+        assert not any("не проверен" in item.value for item in sidebar.info)
+    else:
+        assert any("ещё не подтверждён" in item.value for item in sidebar.info)
+        assert not any("AI:" in item.value for item in sidebar.success)
+
+
+def test_sidebar_shows_current_ai_failure_even_after_a_historic_success() -> None:
+    class RuntimeClient(_FakeAppClient):
+        def health(self) -> dict[str, object]:
+            return {
+                "status": "ok", "agentic_narrative_enabled": True,
+                "agentic_narrative_provider": "openai",
+                "ai_runtime": {
+                    "configured": True, "provider": "openai", "model": "gpt-4o-mini",
+                    "last_success_at": "2026-09-22T12:00:00+00:00",
+                    "last_error": "safe failure", "last_error_code": "insufficient_quota",
+                },
+            }
+
+    app_path = Path(__file__).parents[1] / "src/moneygraph/ui/app.py"
+    with patch("moneygraph.ui.client.APIClient", RuntimeClient):
+        app = AppTest.from_file(app_path, default_timeout=10).run()
+
+    assert not app.exception
+    assert any("баланс" in item.value for item in app.sidebar.warning)
+    assert not any("AI:" in item.value for item in app.sidebar.success)
+
+
 def test_api_start_hint_uses_local_python_and_loopback() -> None:
     class UnavailableSummaryClient(_FakeAppClient):
         def summary(self) -> dict[str, object]:

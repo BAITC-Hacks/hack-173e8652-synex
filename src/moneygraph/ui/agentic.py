@@ -41,7 +41,7 @@ def render_agentic_loop(client: APIClient) -> None:
         "Исходник не содержит внутридневного времени."
     )
     st.caption(
-        "AI ранжирует и готовит локальные артефакты, но не блокирует счета, "
+        "Система ранжирует кейсы и готовит локальные артефакты, но не блокирует счета, "
         "не останавливает переводы и не отправляет сообщения в АФМ. Решение — за аналитиком."
     )
 
@@ -398,6 +398,7 @@ def _render_execution_and_audit(
         "Финальное решение и ответственность остаются у аналитика."
     )
     selected_action_id: str | None = None
+    selected_action: Mapping[str, Any] = {}
     if actions:
         action_ids = {
             action_id: action
@@ -435,7 +436,7 @@ def _render_execution_and_audit(
             st.warning("API не вернул action_id; решение не может быть записано.")
     else:
         st.info("Сначала сформируйте предложения в третьей вкладке.")
-    _execution_result(selected_action_id)
+    _execution_result(selected_action_id, selected_action)
     _audit_timeline(client, alert)
 
 
@@ -474,21 +475,35 @@ def _submit_decision(
     )
     if isinstance(result, Mapping):
         st.session_state["agentic_decision_result"] = dict(result)
-        if decision == "approve":
+        if decision == "approve" and result.get("status") == "executed":
             st.success("Решение approve записано; разрешённый локальный tool исполнен.")
-        else:
+        elif result.get("status") == "failed":
+            st.error("Решение записано, но локальное действие не выполнено. Ошибка сохранена в журнале.")
+        elif decision == "reject":
             st.info("Предложение отклонено; tool не запускался.")
+        else:
+            st.info("Решение записано; завершённое исполнение пока не подтверждено.")
         st.rerun()
 
 
-def _execution_result(selected_action_id: str | None) -> None:
+def _execution_result(
+    selected_action_id: str | None, saved_action: Mapping[str, Any] | None = None
+) -> None:
     result = _session_mapping("agentic_decision_result")
     if not result or _identifier(result, "action_id") != selected_action_id:
+        result = dict(saved_action or {})
+    if not result or _identifier(result, "action_id") != selected_action_id:
+        return
+    if str(result.get("status", "")) not in {"executed", "rejected", "failed"}:
         return
     st.markdown("#### Квитанция решения")
     status = str(result.get("status", result.get("decision", "recorded")))
     if status == "rejected":
         st.info("Статус: rejected. Побочные эффекты отсутствуют.")
+        return
+    if status == "failed":
+        st.error("Локальное действие не выполнено. Ошибка и решение аналитика сохранены в журнале.")
+        st.json(dict(result.get("result", {})), expanded=False)
         return
     execution = result.get("execution", result.get("result"))
     if isinstance(execution, Mapping):
@@ -508,6 +523,16 @@ def _execution_result(selected_action_id: str | None) -> None:
             )
         elif execution.get("kind") == "aml_review_draft":
             st.subheader("Черновик для внутренней AML-проверки")
+            document = execution.get("document_markdown")
+            if isinstance(document, str) and document.strip():
+                st.markdown(document)
+                st.download_button(
+                    "Скачать черновик AML (.md)",
+                    data=document.encode("utf-8"),
+                    file_name="aml-review.md",
+                    mime="text/markdown",
+                    key=f"aml-draft-download-{selected_action_id}",
+                )
             st.write(f"GID: {execution.get('subject_gid', '—')}")
             facts = execution.get("observed_facts")
             if isinstance(facts, Mapping):
@@ -533,11 +558,13 @@ def _audit_timeline(client: APIClient, alert: Mapping[str, Any]) -> None:
         client.agentic_audit,
         limit=100,
         offset=0,
+        newest_first=True,
     )
     events = _records(audit, "events", "audit_events")
     if not events:
         st.caption("Журнал появится после первого шага workflow.")
         return
+    st.caption("Последние 100 событий, сначала самые новые.")
     for event in events:
         occurred = event.get("occurred_at", event.get("created_at", "—"))
         event_type = event.get("event_type", event.get("action", "event"))

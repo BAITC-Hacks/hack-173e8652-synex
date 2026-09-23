@@ -13,9 +13,12 @@ x-common-environment: &common-environment
   DATABASE_URL: sqlite:////app/state/moneygraph.db
   ANALYST_NAME: "${ANALYST_NAME:-demo-analyst}"
   AI_ENABLED: "${AI_ENABLED:-false}"
-  AI_PROVIDER: "${AI_PROVIDER:-fallback}"
+  AI_PROVIDER: "${AI_PROVIDER:-openai}"
   AI_MAX_TOKENS: "${AI_MAX_TOKENS:-320}"
   AI_TEMPERATURE: "${AI_TEMPERATURE:-0}"
+  AI_DAILY_CALL_LIMIT: "${AI_DAILY_CALL_LIMIT:-100}"
+  AI_CACHE_TTL_SECONDS: "${AI_CACHE_TTL_SECONDS:-86400}"
+  AI_STATE_PATH: /app/artifacts/ai_state.sqlite3
   AGENTIC_AI_MIN_PRIORITY_SCORE: "${AGENTIC_AI_MIN_PRIORITY_SCORE:-0.55}"
   PYTHONPYCACHEPREFIX: /tmp/pycache
   HOME: /tmp/moneygraph
@@ -77,7 +80,7 @@ services:
       AGENTIC_AUTO_MONITOR_ENABLED: "${AGENTIC_AUTO_MONITOR_ENABLED:-true}"
       AGENTIC_AUTO_MONITOR_CADENCE_SECONDS: "${AGENTIC_AUTO_MONITOR_CADENCE_SECONDS:-2}"
       OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
-      OPENAI_MODEL: "${OPENAI_MODEL:-}"
+      OPENAI_MODEL: "${OPENAI_MODEL:-gpt-4o-mini}"
       NVIDIA_API_KEY: "${NVIDIA_API_KEY:-}"
       NVIDIA_BASE_URL: "${NVIDIA_BASE_URL:-https://integrate.api.nvidia.com/v1}"
       NVIDIA_MODEL: "${NVIDIA_MODEL:-}"

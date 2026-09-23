@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -167,7 +168,7 @@ def test_nvidia_provider_uses_openai_compatible_base_url() -> None:
     }
 
 
-def test_build_provider_applies_cost_controls_from_configuration() -> None:
+def test_build_provider_applies_cost_controls_from_configuration(tmp_path: Path) -> None:
     completions = _FakeCompletions(content="NIM answer")
 
     def factory(**kwargs: Any) -> _FakeClient:
@@ -183,6 +184,7 @@ def test_build_provider_applies_cost_controls_from_configuration() -> None:
             nvidia_model="configured-nim-model",
             nvidia_base_url="https://nim.example/v1",
         ),
+        environ={"AI_STATE_PATH": str(tmp_path / "ai.sqlite3")},
         client_factory=factory,
     )
     result = provider.answer("Сравни", {"gids": ["1", "2"]})

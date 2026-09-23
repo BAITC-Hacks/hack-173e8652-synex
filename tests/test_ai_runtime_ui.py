@@ -8,6 +8,7 @@ import pytest
 from streamlit.testing.v1 import AppTest
 
 from moneygraph.api.routes.assistant import _optional_provider_answer
+from moneygraph.api.routes.health import health
 from moneygraph.ui.ai_runtime import assessment_view, runtime_status_view
 
 
@@ -69,6 +70,25 @@ def test_runtime_reports_error_without_exposing_raw_provider_exception() -> None
     assert view["tokens"] == 0
     assert "sensitive credential" not in str(view)
     assert "недоступ" in view["message"]
+
+
+@pytest.mark.parametrize("daily_limit", [0, 20])
+def test_runtime_exhausted_budget_does_not_look_like_unlimited_live_ai(daily_limit: int) -> None:
+    view = runtime_status_view(
+        {
+            "configured": True,
+            "provider": "openai",
+            "last_success_at": "2026-09-23T12:00:00+00:00",
+            "daily_call_limit": daily_limit,
+            "requests_today": daily_limit,
+            "remaining_calls": 0,
+        }
+    )
+
+    assert view["verified"] is True
+    assert view["level"] == "warning"
+    assert "лимит" in view["message"].lower()
+    assert "кэш" in view["message"].lower()
 
 
 def test_assessment_marks_cached_case_analysis_and_preserves_evidence_links() -> None:
@@ -151,3 +171,80 @@ render_assessment({
     assert "подтверждён" in app.success[0].value
     assert any("из кэша" in caption.value for caption in app.caption)
     assert any("Неполная выборка" in caption.value for caption in app.caption)
+
+
+def test_health_stays_live_when_ai_usage_store_is_unavailable() -> None:
+    class UnavailableRuntime:
+        narrative_enabled = True
+        narrative_provider_name = "openai"
+
+        @property
+        def ai_status(self) -> dict[str, object]:
+            raise OSError("private storage location should not be exposed")
+
+    services = SimpleNamespace(
+        artifacts=SimpleNamespace(refresh=lambda: None), agentic=UnavailableRuntime()
+    )
+
+    response = health(services)  # type: ignore[arg-type]
+
+    assert response["data"]["status"] == "ok"  # type: ignore[index]
+    assert response["data"]["ai_runtime"]["ai_status"] == "state_unavailable"  # type: ignore[index]
+    assert "private storage location" not in str(response)
+
+
+def test_audit_ui_requests_the_latest_page_so_new_decisions_are_visible() -> None:
+    app = AppTest.from_string(
+        '''
+from moneygraph.ui.agentic import _audit_timeline
+class Feed:
+    def agentic_audit(self, **params):
+        return [{"action": "tool.executed" if params.get("newest_first") else "monitor.scan_completed",
+                 "entity_id": "latest-decision", "actor": "analyst", "created_at": "2026-09-23"}]
+_audit_timeline(Feed(), {})
+'''
+    ).run()
+
+    assert not app.exception
+    assert any("tool.executed" in item.value for item in app.markdown)
+
+
+@pytest.mark.parametrize(
+    ("status", "expected"),
+    [
+        ("authentication_failed", "ключ"),
+        ("insufficient_quota", "баланс"),
+        ("sdk_missing", "зависимост"),
+        ("rate_limited", "частот"),
+        ("invalid_request", "параметр"),
+        ("timeout", "время ожидания"),
+        ("budget_exhausted", "лимит"),
+    ],
+)
+def test_case_fallback_explains_concrete_failure_instead_of_missing_narrative(
+    status: str, expected: str
+) -> None:
+    app = AppTest.from_string(
+        f"from moneygraph.ui.ai_runtime import render_assessment\n"
+        f"render_assessment({{'ai_status': '{status}'}})"
+    ).run()
+
+    assert not app.exception
+    visible = " ".join(item.value for item in [*app.warning, *app.caption, *app.info]).lower()
+    assert expected in visible
+    assert "правила" in visible
+
+
+def test_runtime_reports_sanitized_authentication_fix_not_just_a_generic_outage() -> None:
+    view = runtime_status_view(
+        {
+            "configured": True,
+            "provider": "openai",
+            "ai_status": "authentication_failed",
+            "last_error_code": "authentication_failed",
+            "last_error": "secret raw exception must never be displayed",
+        }
+    )
+
+    assert "ключ" in view["message"].lower()
+    assert "secret raw" not in str(view)

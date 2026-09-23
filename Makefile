@@ -39,7 +39,7 @@ verify-outputs: ## Validate all mandatory CSV contracts and the runtime budget.
 api: ## Start the FastAPI service on the local loopback interface.
 	DATA_DIR="$(DATA_DIR)" OUT_DIR="$(OUT_DIR)" ARTIFACTS_DIR="$(ARTIFACTS_DIR)" \
 		DATABASE_URL="$(DATABASE_URL)" \
-		$(PYTHON) -m uvicorn moneygraph.api.main:app --host "$(HOST)" --port "$(API_PORT)"
+		$(PYTHON) -m uvicorn moneygraph.api.main:app --host "$(HOST)" --port "$(API_PORT)" $(if $(wildcard .env),--env-file .env,)
 
 ui: ## Start the Streamlit analyst workspace on the local loopback interface.
 	MONEYGRAPH_API_URL="http://$(HOST):$(API_PORT)" \

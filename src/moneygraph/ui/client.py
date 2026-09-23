@@ -209,11 +209,12 @@ class APIClient:
         *,
         limit: int = 100,
         offset: int = 0,
+        newest_first: bool = False,
     ) -> Any:
         return self._request(
             "GET",
             "/api/v1/agentic/audit",
-            params={"limit": limit, "offset": offset},
+            params={"limit": limit, "offset": offset, "newest_first": newest_first},
         )
 
 

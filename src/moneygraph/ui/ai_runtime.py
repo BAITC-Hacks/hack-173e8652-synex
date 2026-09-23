@@ -9,6 +9,21 @@ import streamlit as st
 
 from moneygraph.ai.agentic_prompts import SAFE_ACTION_KEYS, SAFE_FACT_KEYS
 
+AI_FAILURE_MESSAGES = {
+    "sdk_missing": "Не установлены зависимости OpenAI SDK в окружении API; установите AI-зависимости проекта.",
+    "authentication_failed": "OpenAI отклонил ключ: проверьте новый действующий ключ в локальном .env и перезапустите API.",
+    "insufficient_quota": "OpenAI сообщил об исчерпанной квоте: проверьте баланс и лимиты выбранного API-проекта.",
+    "rate_limited": "OpenAI ограничил частоту запросов; новые вызовы временно отложены.",
+    "invalid_request": "OpenAI отклонил параметры запроса; проверьте доступ к модели и её поддержку JSON Schema.",
+    "timeout": "Истекло время ожидания OpenAI; ответ не получен, повтор будет ограничен политикой запросов.",
+    "provider_unavailable": "AI-провайдер недоступен или ответ не прошёл проверку; вывод модели не используется.",
+    "budget_exhausted": "Дневной лимит AI-вызовов исчерпан; новый разбор отложен до следующего периода бюджета.",
+    "state_unavailable": "Учёт AI-бюджета недоступен; платные вызовы остановлены для защиты лимита.",
+    "cooldown": "После ошибки AI действует пауза; новый запрос будет возможен после её окончания.",
+    "in_flight": "Разбор этого кейса уже выполняется; повторный AI-запрос не запускается.",
+    "context_too_large": "Контекст кейса превышает безопасный лимит; требуется уменьшить объём запроса.",
+}
+
 
 def runtime_status_view(status: Mapping[str, Any]) -> dict[str, Any]:
     configured = status.get("configured") is True
@@ -19,7 +34,12 @@ def runtime_status_view(status: Mapping[str, Any]) -> dict[str, Any]:
         level, message = "warning", "LLM отключён или не настроен: работают правила и графовая аналитика."
     elif error:
         level = "warning"
-        message = "Последний AI-запрос или учёт бюджета недоступен; сохранён безопасный режим правил."
+        reason = status.get("last_error_code") or status.get("ai_status")
+        message = AI_FAILURE_MESSAGES.get(str(reason), AI_FAILURE_MESSAGES["provider_unavailable"])
+        message += " Пока работают правила и графовая аналитика."
+    elif status.get("daily_call_limit") is not None and not _count(status.get("remaining_calls")):
+        level = "warning"
+        message = "Дневной лимит AI-вызовов исчерпан: доступны кэш и детерминированные правила."
     elif verified:
         level, message = "success", f"{provider}: успешный ответ модели подтверждён журналом вызовов."
     else:
@@ -92,7 +112,11 @@ def assessment_view(facts: Mapping[str, Any]) -> dict[str, Any] | None:
 def render_assessment(facts: Mapping[str, Any], *, compact: bool = False) -> None:
     assessment = assessment_view(facts)
     if assessment is None:
-        st.caption("Для этого кейса показаны правила; структурированный разбор LLM не сохранён.")
+        reason = AI_FAILURE_MESSAGES.get(str(facts.get("ai_status", "")))
+        if reason:
+            st.warning(f"{reason} Для этого кейса пока показаны правила.")
+        else:
+            st.caption("Кейс ещё не получил проверенный разбор модели; пока показаны правила.")
         return
     source = "сохранённый ответ из кэша" if assessment["cached"] else "сохранённый ответ модели"
     st.info(f"Разбор {assessment['provider']}: {assessment['summary']}")

@@ -61,6 +61,7 @@ class AgenticAutoMonitor:
                 return None
 
             self._state = "scanning"
+            self._last_error = None
             try:
                 scan = self._service.run_scan(next_day, actor="auto-monitor")
             except IntegrityError:
@@ -88,7 +89,8 @@ class AgenticAutoMonitor:
     def status(self) -> dict[str, Any]:
         with self._lock:
             scans = self._repository.list_auto_monitoring_scans()
-            latest_scan = scans[-1] if scans else None
+            completed_scans = [scan for scan in scans if self._scan_is_complete(scan)]
+            latest_scan = completed_scans[-1] if completed_scans else None
             recent_alerts = [
                 {**alert, "replay_date": scan["replay_date"]}
                 for scan in reversed(scans)
@@ -96,12 +98,14 @@ class AgenticAutoMonitor:
                     scan["alerts"],
                     key=lambda item: (-float(item["priority_score"]), str(item["gid"])),
                 )
+                if self._alert_is_complete(alert)
             ][:30]
             queued_alerts = sorted(
                 (
                     {**alert, "replay_date": scan["replay_date"]}
                     for scan in scans
                     for alert in scan["alerts"]
+                    if self._alert_is_complete(alert)
                     if any(action["status"] == "proposed" for action in alert["actions"])
                     and not any(action["status"] == "executed" for action in alert["actions"])
                 ),
@@ -116,7 +120,7 @@ class AgenticAutoMonitor:
                 "enabled": self._enabled,
                 "state": self._state,
                 "cadence_seconds": self._cadence_seconds,
-                "processed_days": len({scan["replay_date"] for scan in scans}),
+                "processed_days": len({scan["replay_date"] for scan in completed_scans}),
                 "total_days": self._total_days,
                 "latest_scan": latest_scan,
                 "recent_alerts": recent_alerts,
@@ -128,6 +132,16 @@ class AgenticAutoMonitor:
                 "source_time_granularity": "day",
                 "ai_runtime": self._service.ai_status,
             }
+
+    @staticmethod
+    def _scan_is_complete(scan: dict[str, Any]) -> bool:
+        """A replay day is publishable only after every alert has three action cards."""
+
+        return all(AgenticAutoMonitor._alert_is_complete(alert) for alert in scan.get("alerts", []))
+
+    @staticmethod
+    def _alert_is_complete(alert: dict[str, Any]) -> bool:
+        return len(alert.get("actions", [])) == 3
 
     async def run(self) -> None:
         if not self._enabled:

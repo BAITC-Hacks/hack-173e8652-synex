@@ -16,6 +16,15 @@ def health(services: ServicesDependency) -> dict[str, object]:
         artifacts_status = "available"
     except Exception:
         artifacts_status = "pending"
+    try:
+        ai_runtime = services.agentic.ai_status
+    except Exception:
+        ai_runtime = {
+            "configured": services.agentic.narrative_enabled,
+            "provider": services.agentic.narrative_provider_name,
+            "ai_status": "state_unavailable",
+            "last_error": "AI usage accounting is temporarily unavailable.",
+        }
     return {
         "data": {
             "status": "ok",
@@ -24,6 +33,6 @@ def health(services: ServicesDependency) -> dict[str, object]:
             "ai_required": False,
             "agentic_narrative_enabled": services.agentic.narrative_enabled,
             "agentic_narrative_provider": services.agentic.narrative_provider_name,
-            "ai_runtime": services.agentic.ai_status,
+            "ai_runtime": ai_runtime,
         }
     }

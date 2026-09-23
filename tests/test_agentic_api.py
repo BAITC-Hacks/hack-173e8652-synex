@@ -173,6 +173,34 @@ def test_audit_lists_every_persisted_loop_transition(client: TestClient) -> None
     assert "tool.executed" in actions
 
 
+def test_newest_audit_page_shows_recent_approval_after_more_than_100_events(
+    client: TestClient,
+) -> None:
+    for _ in range(55):
+        _create_scan(client)
+    proposals = _create_proposals(client)
+    action_id = proposals["actions"][0]["id"]  # type: ignore[index]
+    decision = client.post(
+        f"/api/v1/agentic/actions/{action_id}/decision",
+        headers={"Idempotency-Key": "recent-audit-decision"},
+        json={"decision": "approve", "confirmation": "APPROVE"},
+    )
+    assert decision.status_code == 200
+
+    recent = client.get(
+        "/api/v1/agentic/audit", params={"limit": 100, "offset": 0, "newest_first": True}
+    ).json()
+    chronological = client.get("/api/v1/agentic/audit", params={"limit": 100}).json()
+
+    assert recent["meta"]["total"] > 100
+    assert [item["action"] for item in recent["data"][:2]] == [
+        "tool.executed", "action.approved"
+    ]
+    assert recent["data"][0]["entity_id"] == action_id
+    assert chronological["data"][0]["action"] == "monitor.scan_completed"
+    assert all(item["action"] != "tool.executed" for item in chronological["data"])
+
+
 def test_agentic_validation_rejects_tampering_and_unbounded_inputs(client: TestClient) -> None:
     proposals = _create_proposals(client)
     action_id = proposals["actions"][0]["id"]  # type: ignore[index]

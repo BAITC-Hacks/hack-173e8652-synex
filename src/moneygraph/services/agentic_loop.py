@@ -171,7 +171,7 @@ class AgenticLoopService:
         provider = self._narrative_provider
         if provider is None:
             return alert
-        if callable(getattr(provider, "assess_alert", None)):
+        if provider.name == "openai" and callable(getattr(provider, "assess_alert", None)):
             return assess_case(provider, alert)
         cache_key = self._narrative_cache_key(alert, provider.name)
         if cache_key in self._narrative_cache:
@@ -283,7 +283,10 @@ class AgenticLoopService:
 
     def enrich_next_pending(self) -> bool:
         """Upgrade one historical pending case automatically, without changing decisions."""
-        if not callable(getattr(self._narrative_provider, "assess_alert", None)):
+        if (
+            self.narrative_provider_name != "openai"
+            or not callable(getattr(self._narrative_provider, "assess_alert", None))
+        ):
             return False
         pending = [
             alert
@@ -338,8 +341,12 @@ class AgenticLoopService:
             effect=effect,
         )
 
-    def list_audit_events(self, *, limit: int, offset: int) -> dict[str, Any]:
-        return self._repository.list_agentic_audit_events(limit=limit, offset=offset)
+    def list_audit_events(
+        self, *, limit: int, offset: int, newest_first: bool = False
+    ) -> dict[str, Any]:
+        return self._repository.list_agentic_audit_events(
+            limit=limit, offset=offset, newest_first=newest_first
+        )
 
     def _load_transactions(self) -> pd.DataFrame:
         path = self._data_dir / "transactions.parquet"
@@ -522,6 +529,12 @@ class AgenticLoopService:
         gid = str(alert["gid"])
         facts = dict(alert["facts"])
         if action_key == "prepare_aml_review_draft":
+            from moneygraph.services.review_document import (
+                ANALYST_CHECKS,
+                build_aml_review_document,
+            )
+
+            document = build_aml_review_document(alert)
             execution_id = str(uuid4())
             result = {
                 "execution_id": execution_id,
@@ -532,6 +545,9 @@ class AgenticLoopService:
                 "submitted": False,
                 "external_effects": [],
                 "subject_gid": gid,
+                "document_title": document.title,
+                "document_format": "text/markdown",
+                "document_markdown": document.markdown,
                 "observed_facts": {
                     key: facts.get(key)
                     for key in (
@@ -541,23 +557,16 @@ class AgenticLoopService:
                         "fast_forward_0_2d_ratio",
                     )
                 },
-                "required_checks": [
-                    "Проверить входящие операции вне текущей выборки.",
-                    "Проверить историю до начала наблюдаемого периода.",
-                    "Подтвердить выводы по банковским KYC/AML-данным.",
-                ],
+                "required_checks": list(ANALYST_CHECKS),
             }
             return {
                 "result": result,
                 "investigation": {
-                    "title": f"AML review draft: {gid}",
-                    "description": str(alert["explanation"]),
-                    "model_version": "agentic-rules-v1",
+                    "title": document.title,
+                    "description": document.investigation_description,
+                    "model_version": document.model_version,
                     "gids": [gid],
-                    "note": (
-                        "Автоматически подготовлен локальный черновик. "
-                        "Не отправлен; требует проверки аналитиком."
-                    ),
+                    "note": document.investigation_note,
                 },
             }
         if action_key == "build_money_route":

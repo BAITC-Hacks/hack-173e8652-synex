@@ -6,6 +6,7 @@ from typing import ClassVar
 from unittest.mock import patch
 
 import httpx
+import streamlit as st
 from streamlit.testing.v1 import AppTest
 
 from moneygraph.ui.agentic import _route_figure_payload
@@ -377,3 +378,79 @@ def test_priority_case_is_selected_without_manual_scan_or_proposal_request() -> 
     assert "001000000000000999" in visible
     assert "Следующий кейс для проверки" in visible
     assert any(expander.label == "Ручной replay (диагностика)" for expander in app.expander)
+
+
+def test_approved_aml_document_is_rendered_and_download_contains_real_document() -> None:
+    document = "# Черновик AML-проверки\n\nGID collector: 8 плательщиков, 1200000 KZT.\nНе отправлен."
+    script = f'''
+import streamlit as st
+from moneygraph.ui.agentic import _execution_result
+st.session_state["agentic_decision_result"] = {{
+    "action_id": "draft-action", "status": "executed", "result": {{
+        "kind": "aml_review_draft", "subject_gid": "collector",
+        "document_markdown": {document!r}, "submitted": False,
+    }}
+}}
+_execution_result("draft-action")
+'''
+    with patch("moneygraph.ui.agentic.st.download_button", wraps=st.download_button) as download:
+        app = AppTest.from_string(script).run()
+
+    assert not app.exception
+    assert any(document == item.value for item in app.markdown)
+    assert download.call_count == 1
+    assert download.call_args.kwargs["data"] == document.encode("utf-8")
+    assert download.call_args.kwargs["mime"] == "text/markdown"
+    assert download.call_args.kwargs["file_name"].endswith(".md")
+
+
+def test_failed_execution_is_not_presented_as_a_successful_receipt() -> None:
+    app = AppTest.from_string(
+        '''
+import streamlit as st
+from moneygraph.ui.agentic import _execution_result
+st.session_state["agentic_decision_result"] = {
+    "action_id": "failed-action", "status": "failed",
+    "result": {"executed": False, "error": "tool_execution_failed"},
+}
+_execution_result("failed-action")
+'''
+    ).run()
+
+    assert not app.exception
+    assert not app.success
+    assert app.error
+
+
+def test_saved_document_is_visible_without_a_session_receipt_after_reload() -> None:
+    app = AppTest.from_string(
+        '''
+from moneygraph.ui.agentic import _execution_result
+_execution_result("stored-action", {
+    "id": "stored-action", "status": "executed", "result": {
+        "kind": "aml_review_draft", "document_markdown": "# Сохранённый черновик",
+        "subject_gid": "collector", "submitted": False,
+    },
+})
+'''
+    ).run()
+
+    assert not app.exception
+    assert any(item.value == "# Сохранённый черновик" for item in app.markdown)
+
+
+def test_failed_approval_response_does_not_claim_the_tool_executed() -> None:
+    script = '''
+from moneygraph.ui.agentic import _submit_decision
+class Feed:
+    def decide_agentic_action(self, *args, **kwargs):
+        return {"action_id": "failed-action", "status": "failed",
+                "result": {"executed": False, "error": "tool_execution_failed"}}
+_submit_decision(Feed(), "failed-action", "approve", "APPROVE")
+'''
+    with patch("moneygraph.ui.agentic.st.rerun"):
+        app = AppTest.from_string(script).run()
+
+    assert not app.exception
+    assert not app.success
+    assert app.error

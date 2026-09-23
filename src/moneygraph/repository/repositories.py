@@ -810,9 +810,16 @@ class MoneyGraphRepository:
 
     @classmethod
     def _alert_dict(cls, alert: MonitoringAlert) -> dict[str, Any]:
+        assessment = alert.facts.get("ai_assessment", {})
+        candidates = assessment.get("actions", []) if isinstance(assessment, dict) else []
+        keys = [item.get("action_key") for item in candidates if isinstance(item, dict)]
+        order = (
+            keys if len(keys) == 3 and set(keys) == ALLOWED_AGENTIC_ACTIONS
+            else list(AGENTIC_ACTION_ORDER)
+        )
         ordered_actions = sorted(
             alert.actions,
-            key=lambda item: AGENTIC_ACTION_ORDER.index(item.action_key),
+            key=lambda item: order.index(item.action_key),
         )
         severity = "critical" if len(alert.rule_keys) >= 2 else "high"
         return {
@@ -867,7 +874,7 @@ class MoneyGraphRepository:
                 return {
                     "alert_id": alert_id,
                     "score_meaning": "next_step_suitability_not_violation_probability",
-                    "actions": [self._action_dict(action) for action in alert.actions],
+                    "actions": self._alert_dict(alert)["actions"],
                 }
 
             action_ids: list[str] = []
@@ -1146,12 +1153,19 @@ class MoneyGraphRepository:
             "created_at": _iso(action.created_at),
         }
 
-    def list_agentic_audit_events(self, *, limit: int, offset: int) -> dict[str, Any]:
+    def list_agentic_audit_events(
+        self, *, limit: int, offset: int, newest_first: bool = False
+    ) -> dict[str, Any]:
         if not 1 <= limit <= 500:
             raise ValueError("limit must be between 1 and 500")
         if offset < 0:
             raise ValueError("offset must not be negative")
         predicate = AuditEvent.action.in_(AGENTIC_AUDIT_ACTIONS)
+        ordering = (
+            (AuditEvent.created_at.desc(), AuditEvent.id.desc())
+            if newest_first
+            else (AuditEvent.created_at.asc(), AuditEvent.id.asc())
+        )
         with self._session_factory() as session:
             total = int(
                 session.scalar(select(func.count()).select_from(AuditEvent).where(predicate)) or 0
@@ -1159,7 +1173,7 @@ class MoneyGraphRepository:
             events = session.scalars(
                 select(AuditEvent)
                 .where(predicate)
-                .order_by(AuditEvent.created_at, AuditEvent.id)
+                .order_by(*ordering)
                 .offset(offset)
                 .limit(limit)
             ).all()
