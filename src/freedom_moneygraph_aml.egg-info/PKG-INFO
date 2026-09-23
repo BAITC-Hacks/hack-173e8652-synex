@@ -13,6 +13,7 @@ Requires-Dist: plotly<7.0,>=5.24
 Requires-Dist: pyarrow<22,>=16
 Requires-Dist: pydantic-settings<3.0,>=2.7
 Requires-Dist: PyYAML<7.0,>=6.0
+Requires-Dist: scipy<2.0,>=1.15
 Requires-Dist: sqlalchemy<3.0,>=2.0
 Requires-Dist: streamlit<2.0,>=1.41
 Requires-Dist: uvicorn[standard]<1.0,>=0.34

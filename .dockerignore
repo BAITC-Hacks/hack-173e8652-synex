@@ -1,0 +1,11 @@
+**
+!pyproject.toml
+!README.md
+!src/
+!src/**
+!config/
+!config/**
+!scripts/
+!scripts/**
+**/__pycache__/
+**/*.py[cod]

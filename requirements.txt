@@ -8,6 +8,7 @@ plotly>=5.24,<7.0
 pyarrow>=16,<22
 pydantic-settings>=2.7,<3.0
 PyYAML>=6.0,<7.0
+scipy>=1.15,<2.0
 sqlalchemy>=2.0,<3.0
 streamlit>=1.41,<2.0
 uvicorn[standard]>=0.34,<1.0
@@ -17,4 +18,3 @@ pytest>=8.3,<10.0
 pytest-cov>=6.0,<8.0
 ruff>=0.9,<1.0
 types-PyYAML>=6.0,<7.0
-

@@ -18,6 +18,7 @@ dependencies = [
   "pyarrow>=16,<22",
   "pydantic-settings>=2.7,<3.0",
   "PyYAML>=6.0,<7.0",
+  "scipy>=1.15,<2.0",
   "sqlalchemy>=2.0,<3.0",
   "streamlit>=1.41,<2.0",
   "uvicorn[standard]>=0.34,<1.0",
@@ -63,16 +64,15 @@ skip_covered = true
 [tool.ruff]
 line-length = 100
 target-version = "py311"
-extend-exclude = ["out", "artifacts"]
+extend-exclude = ["out", "artifacts", "starter", "src/freedom_moneygraph_aml.egg-info"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "SIM", "RUF"]
-ignore = ["E501"]
+ignore = ["E501", "RUF001", "RUF002", "RUF003"]
 
 [tool.mypy]
-python_version = "3.11"
+python_version = "3.12"
 packages = ["moneygraph"]
 strict = true
 warn_unreachable = true
 ignore_missing_imports = true
-

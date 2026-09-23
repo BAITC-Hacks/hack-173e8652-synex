@@ -1,0 +1,143 @@
+name: freedom-moneygraph-aml
+
+x-app-build: &app-build
+  context: .
+  args:
+    APP_UID: "${APP_UID:-10001}"
+    APP_GID: "${APP_GID:-10001}"
+
+x-common-environment: &common-environment
+  DATA_DIR: /app/data
+  OUT_DIR: /app/out
+  ARTIFACTS_DIR: /app/artifacts
+  DATABASE_URL: sqlite:////app/state/moneygraph.db
+  ANALYST_NAME: "${ANALYST_NAME:-demo-analyst}"
+  AI_ENABLED: "false"
+  AI_PROVIDER: fallback
+  PYTHONPYCACHEPREFIX: /tmp/pycache
+  HOME: /tmp/moneygraph
+
+x-runtime-hardening: &runtime-hardening
+  init: true
+  read_only: true
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+  tmpfs:
+    - /tmp:rw,noexec,nosuid,size=128m
+  networks:
+    - moneygraph
+
+services:
+  analyzer:
+    <<: *runtime-hardening
+    build: *app-build
+    image: freedom-moneygraph-aml:local
+    command:
+      - python
+      - -m
+      - moneygraph.cli
+      - analyze
+      - --data
+      - /app/data
+      - --out
+      - /app/out
+      - --artifacts
+      - /app/artifacts
+      - --database-url
+      - sqlite:////app/state/moneygraph.db
+    environment: *common-environment
+    volumes:
+      - ./data:/app/data:ro
+      - ./out:/app/out
+      - ./artifacts:/app/artifacts
+      - moneygraph-state:/app/state
+    restart: "no"
+
+  api:
+    <<: *runtime-hardening
+    build: *app-build
+    image: freedom-moneygraph-aml:local
+    command:
+      - python
+      - -m
+      - uvicorn
+      - moneygraph.api.main:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+    environment:
+      <<: *common-environment
+      CORS_ORIGINS: "${CORS_ORIGINS:-http://127.0.0.1:8501,http://localhost:8501}"
+    volumes:
+      - ./data:/app/data:ro
+      - ./out:/app/out
+      - ./artifacts:/app/artifacts
+      - moneygraph-state:/app/state
+    ports:
+      - "127.0.0.1:${API_PORT:-8000}:8000"
+    depends_on:
+      analyzer:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2)
+      interval: 10s
+      timeout: 3s
+      start_period: 10s
+      retries: 8
+    restart: on-failure:3
+
+  ui:
+    <<: *runtime-hardening
+    build: *app-build
+    image: freedom-moneygraph-aml:local
+    command:
+      - python
+      - -m
+      - streamlit
+      - run
+      - src/moneygraph/ui/app.py
+      - --server.address
+      - 0.0.0.0
+      - --server.port
+      - "8501"
+      - --server.headless
+      - "true"
+      - --browser.gatherUsageStats
+      - "false"
+    environment:
+      <<: *common-environment
+      MONEYGRAPH_API_URL: http://api:8000
+      API_BASE_URL: http://api:8000
+    volumes:
+      - ./out:/app/out:ro
+      - ./artifacts:/app/artifacts:ro
+    ports:
+      - "127.0.0.1:${UI_PORT:-8501}:8501"
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen('http://127.0.0.1:8501/_stcore/health', timeout=2)
+      interval: 10s
+      timeout: 3s
+      start_period: 15s
+      retries: 8
+    restart: on-failure:3
+
+networks:
+  moneygraph:
+    driver: bridge
+
+volumes:
+  moneygraph-state:

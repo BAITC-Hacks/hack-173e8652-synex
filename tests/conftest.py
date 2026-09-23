@@ -49,4 +49,3 @@ def synthetic_data_dir(
     edges.to_parquet(tmp_path / "edges.parquet", index=False)
     tx.to_parquet(tmp_path / "transactions.parquet", index=False)
     return tmp_path
-

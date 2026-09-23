@@ -4,6 +4,7 @@
 __pycache__/
 *.py[cod]
 .pytest_cache/
+.playwright-cli/
 .mypy_cache/
 .ruff_cache/
 .coverage
@@ -15,4 +16,3 @@ out/*
 !out/.gitkeep
 artifacts/*
 !artifacts/.gitkeep
-

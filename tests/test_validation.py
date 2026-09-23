@@ -17,6 +17,33 @@ def test_load_and_validate_accepts_consistent_parquet(synthetic_data_dir) -> Non
     assert report.isolated_gids == ("isolated",)
 
 
+def test_load_dataset_canonicalizes_large_integer_ids_without_mutating_source(tmp_path) -> None:
+    large_gid = 100_000_000_343_175_100
+    nodes = pd.DataFrame(
+        [{"gid": large_gid, "depth": 0, "is_seed": True}],
+    )
+    edges = pd.DataFrame(
+        columns=pd.Index(["src", "dst", "sum_kzt", "n_tx", "depth"]),
+    ).astype(
+        {"src": "int64", "dst": "int64", "sum_kzt": "float64", "n_tx": "int64", "depth": "int8"}
+    )
+    tx = pd.DataFrame(
+        columns=pd.Index(["src", "dst", "date", "sum_kzt"]),
+    ).astype({"src": "int64", "dst": "int64", "sum_kzt": "float64"})
+
+    nodes.to_parquet(tmp_path / "nodes.parquet", index=False)
+    edges.to_parquet(tmp_path / "edges.parquet", index=False)
+    tx.to_parquet(tmp_path / "transactions.parquet", index=False)
+
+    loaded = load_dataset(tmp_path)
+
+    assert loaded.nodes.loc[0, "gid"] == str(large_gid)
+    assert str(loaded.nodes["gid"].dtype) == "string"
+    assert str(loaded.edges["src"].dtype) == "string"
+    assert str(loaded.transactions["dst"].dtype) == "string"
+    assert nodes.loc[0, "gid"] == large_gid
+
+
 def test_validation_rejects_edge_transaction_amount_mismatch(synthetic_frames) -> None:
     nodes, edges, tx = synthetic_frames
     changed_edges = edges.assign(
@@ -30,7 +57,12 @@ def test_validation_rejects_edge_transaction_amount_mismatch(synthetic_frames) -
 def test_validation_rejects_non_positive_transaction(synthetic_frames) -> None:
     nodes, edges, tx = synthetic_frames
     invalid_tx = pd.concat(
-        [tx, pd.DataFrame([{"src": "seed", "dst": "sink", "date": pd.Timestamp("2026-07-01"), "sum_kzt": 0.0}])],
+        [
+            tx,
+            pd.DataFrame(
+                [{"src": "seed", "dst": "sink", "date": pd.Timestamp("2026-07-01"), "sum_kzt": 0.0}]
+            ),
+        ],
         ignore_index=True,
     )
 
@@ -57,4 +89,3 @@ def test_validation_records_self_loop_instead_of_hiding_it(synthetic_frames) -> 
 
     assert report.self_loops == 1
     assert any("self-loop" in warning.lower() for warning in report.warnings)
-

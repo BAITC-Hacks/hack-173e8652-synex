@@ -1,0 +1,29 @@
+flowchart LR
+    A[(3 Parquet files)] --> B{Strict validation}
+    B -->|critical error| X[Non-zero exit + report]
+    B -->|valid snapshot| C[Directed weighted graph]
+    C --> D[Graph and financial features]
+    A --> E[Temporal FIFO matching]
+    C --> F[Louvain communities]
+    D --> G[Explainable role scores]
+    E --> G
+    F --> G
+    G --> H[Priority score and drivers]
+    H --> I[Mandatory CSV]
+    H --> J[Parquet / JSON / SQLite]
+    I --> K[FastAPI]
+    J --> K
+    K --> L[Streamlit analyst workspace]
+    K -. minimized metrics only .-> M[Optional AI Copilot]
+    M -. failure or disabled .-> N[Deterministic fallback]
+    L --> O[Investigation + notes + export]
+
+    classDef input fill:#e8f1ff,stroke:#2563eb,color:#111827;
+    classDef core fill:#ecfdf5,stroke:#059669,color:#111827;
+    classDef output fill:#fff7ed,stroke:#ea580c,color:#111827;
+    classDef guard fill:#fef2f2,stroke:#dc2626,color:#111827;
+
+    class A input;
+    class B,X guard;
+    class C,D,E,F,G,H core;
+    class I,J,K,L,M,N,O output;

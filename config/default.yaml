@@ -1,0 +1,60 @@
+random_seed: 42
+top_n: 50
+role_threshold: 0.40
+max_seed_hops: 4
+round_amount_multiple: 10000
+
+# Every section is deliberately normalized to 1.0 so that a score can be
+# audited as a weighted average of signals in [0, 1].
+roles:
+  consolidator:
+    in_degree: 0.35
+    in_transactions: 0.15
+    in_amount: 0.15
+    authority: 0.10
+    seed_reach: 0.10
+    retention: 0.10
+    daily_payers: 0.05
+  distributor:
+    out_degree: 0.40
+    out_transactions: 0.20
+    out_amount: 0.15
+    hub: 0.10
+    recipients_to_payers: 0.10
+    daily_fan_out: 0.05
+  transit:
+    pass_through: 0.25
+    fast_forward: 0.25
+    matched_out: 0.15
+    degree_balance: 0.10
+    amount_balance: 0.10
+    betweenness: 0.10
+    temporal_activity: 0.05
+  coordinator:
+    betweenness: 0.30
+    pagerank: 0.20
+    seed_reach: 0.20
+    cross_cluster_bridge: 0.15
+    component_structure: 0.10
+    balanced_flow: 0.05
+  terminal:
+    observed_input: 0.20
+    no_observed_output: 0.40
+    in_amount: 0.15
+    in_degree: 0.10
+    retention: 0.10
+    authority: 0.05
+priority:
+  coordinator: 0.22
+  consolidator: 0.18
+  distributor: 0.12
+  transit: 0.08
+  pagerank: 0.12
+  betweenness: 0.12
+  seed_reach: 0.10
+  turnover: 0.06
+
+limits:
+  depth4_terminal_cap: 0.25
+  seed_transit_penalty: 0.60
+  evidence_max_chars: 200
