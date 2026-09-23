@@ -188,7 +188,11 @@ def test_health_reports_constructed_agentic_narrative_without_credentials(
     )
     assert response.json()["data"]["agentic_narrative_provider"] == expected_provider
     assert "fixture-key" not in response.text
-    assert "fixture-model" not in response.text
+    runtime = response.json()["data"]["ai_runtime"]
+    assert runtime["configured"] is (expected_provider is not None)
+    if expected_provider is not None:
+        assert runtime["model"] == "fixture-model"
+        assert not runtime.get("last_success_at")
 
 
 def test_node_graph_summary_and_cluster_endpoints(client: TestClient) -> None:

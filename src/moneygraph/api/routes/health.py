@@ -24,5 +24,6 @@ def health(services: ServicesDependency) -> dict[str, object]:
             "ai_required": False,
             "agentic_narrative_enabled": services.agentic.narrative_enabled,
             "agentic_narrative_provider": services.agentic.narrative_provider_name,
+            "ai_runtime": services.agentic.ai_status,
         }
     }

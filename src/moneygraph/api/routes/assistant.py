@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import inspect
 from collections.abc import Mapping
 from typing import Any
@@ -68,7 +69,7 @@ async def _optional_provider_answer(query: str, context: dict[str, Any]) -> dict
         return None
     try:
         provider = build_provider()
-        raw: Any = provider.answer(query, context)
+        raw: Any = await asyncio.to_thread(provider.answer, query, context)
         if inspect.isawaitable(raw):
             raw = await raw
         if not isinstance(raw, Mapping):

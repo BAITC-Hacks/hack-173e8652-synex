@@ -119,8 +119,15 @@ class Settings(BaseSettings):
         "http://localhost:8501",
     )
     ai_enabled: bool = False
+    ai_provider: str = "fallback"
+    ai_max_tokens: int = 320
+    ai_temperature: float = 0.0
     openai_api_key: str | None = None
+    openai_model: str | None = None
     nvidia_api_key: str | None = None
+    nvidia_base_url: str = "https://integrate.api.nvidia.com/v1"
+    nvidia_model: str | None = None
+    nvidia_disable_thinking: bool = True
     log_level: str = "INFO"
 
     @field_validator("cors_origins", mode="before")

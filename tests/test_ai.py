@@ -62,11 +62,14 @@ def test_fallback_is_deterministic_non_accusatory_and_cites_available_metrics() 
 class _Settings:
     ai_enabled: bool
     ai_provider: str = "fallback"
+    ai_max_tokens: int = 320
+    ai_temperature: float = 0.0
     openai_api_key: str | None = None
     openai_model: str | None = None
     nvidia_api_key: str | None = None
     nvidia_base_url: str | None = None
     nvidia_model: str | None = None
+    nvidia_disable_thinking: bool = True
 
 
 def test_build_provider_remains_offline_when_ai_is_disabled() -> None:
@@ -130,11 +133,13 @@ def test_openai_provider_is_lazy_and_sends_only_minimized_context() -> None:
 
     assert result["fallback"] is False
     assert result["provider"] == "openai"
-    assert factory_calls == [{"api_key": "provided-through-env"}]
+    assert factory_calls == [{"api_key": "provided-through-env", "timeout": 20.0, "max_retries": 0}]
     sent_prompt = completions.calls[0]["messages"][1]["content"]
     assert "0007" in sent_prompt
     assert "hidden" not in sent_prompt
     assert completions.calls[0]["model"] == "configured-model"
+    assert completions.calls[0]["max_tokens"] == 320
+    assert completions.calls[0]["temperature"] == 0.0
 
 
 def test_nvidia_provider_uses_openai_compatible_base_url() -> None:
@@ -157,6 +162,37 @@ def test_nvidia_provider_uses_openai_compatible_base_url() -> None:
     assert factory_calls == [
         {"api_key": "provided-through-env", "base_url": "https://nim.example/v1"}
     ]
+    assert completions.calls[0]["extra_body"] == {
+        "chat_template_kwargs": {"enable_thinking": False}
+    }
+
+
+def test_build_provider_applies_cost_controls_from_configuration() -> None:
+    completions = _FakeCompletions(content="NIM answer")
+
+    def factory(**kwargs: Any) -> _FakeClient:
+        return _FakeClient(completions)
+
+    provider = build_provider(
+        _Settings(
+            ai_enabled=True,
+            ai_provider="nvidia",
+            ai_max_tokens=96,
+            ai_temperature=0.2,
+            nvidia_api_key="provided-through-env",
+            nvidia_model="configured-nim-model",
+            nvidia_base_url="https://nim.example/v1",
+        ),
+        client_factory=factory,
+    )
+    result = provider.answer("Сравни", {"gids": ["1", "2"]})
+
+    assert result["fallback"] is False
+    assert completions.calls[0]["max_tokens"] == 96
+    assert completions.calls[0]["temperature"] == 0.2
+    assert completions.calls[0]["extra_body"] == {
+        "chat_template_kwargs": {"enable_thinking": False}
+    }
 
 
 def test_resilient_provider_returns_deterministic_answer_on_api_error() -> None:

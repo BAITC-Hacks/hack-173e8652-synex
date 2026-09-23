@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
-from typing import Any, Protocol, TypedDict, runtime_checkable
+from typing import Any, NotRequired, Protocol, TypedDict, runtime_checkable
 
 
 class AIResult(TypedDict):
@@ -15,6 +15,11 @@ class AIResult(TypedDict):
     fallback: bool
     tools_used: list[str]
     limitations: list[str]
+    assessment: NotRequired[dict[str, Any]]
+    model: NotRequired[str]
+    usage: NotRequired[dict[str, int]]
+    cached: NotRequired[bool]
+    ai_status: NotRequired[str]
 
 
 @runtime_checkable

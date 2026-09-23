@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 
 from moneygraph.ai.base import AIConfigurationError
@@ -17,11 +18,31 @@ class NvidiaNimProvider(OpenAIProvider):
         api_key: str,
         model: str,
         base_url: str,
+        max_tokens: int = 320,
+        temperature: float = 0.0,
+        extra_body: Mapping[str, Any] | None = None,
+        disable_thinking: bool = True,
         client_factory: ClientFactory | None = None,
     ) -> None:
         if not base_url:
             raise AIConfigurationError("NVIDIA NIM requires base URL from environment")
-        super().__init__(api_key=api_key, model=model, client_factory=client_factory)
+        request_body = dict(extra_body or {})
+        if disable_thinking:
+            request_body = {
+                **request_body,
+                "chat_template_kwargs": {
+                    **dict(request_body.get("chat_template_kwargs", {})),
+                    "enable_thinking": False,
+                },
+            }
+        super().__init__(
+            api_key=api_key,
+            model=model,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            extra_body=request_body,
+            client_factory=client_factory,
+        )
         self._base_url = base_url.rstrip("/")
 
     @property

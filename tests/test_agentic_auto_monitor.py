@@ -4,7 +4,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date
 from pathlib import Path
-from threading import Barrier
+from threading import Barrier, Event
 
 import pandas as pd
 from fastapi.testclient import TestClient
@@ -78,6 +78,29 @@ def test_auto_monitor_scans_each_day_without_lookahead_and_prepares_only_proposa
     assert "actions.proposed" in {entry["action"] for entry in audit}
     assert "tool.executed" not in {entry["action"] for entry in audit}
     assert "action.approved" not in {entry["action"] for entry in audit}
+
+
+def test_monitor_status_does_not_wait_for_remote_assessment(tmp_path: Path) -> None:
+    _write_fixture_transactions(tmp_path / "data")
+    monitor, _ = _build_monitor(tmp_path)
+    entered, release = Event(), Event()
+    original = monitor._service.run_scan
+
+    def slow_scan(*args: object, **kwargs: object) -> dict[str, object]:
+        entered.set()
+        assert release.wait(3)
+        return original(*args, **kwargs)  # type: ignore[arg-type]
+
+    monitor._service.run_scan = slow_scan  # type: ignore[method-assign]
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        scan = executor.submit(monitor.tick_once)
+        assert entered.wait(1)
+        status = executor.submit(monitor.status)
+        try:
+            assert status.result(timeout=0.5)["state"] == "scanning"
+        finally:
+            release.set()
+        assert scan.result(timeout=2) is not None
 
 
 def test_auto_monitor_restart_skips_persisted_days_and_picks_up_new_source_day(

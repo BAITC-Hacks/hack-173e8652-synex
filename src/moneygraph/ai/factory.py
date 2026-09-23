@@ -44,6 +44,14 @@ def build_provider(
     env = os.environ if environ is None else environ
     enabled = _as_bool(_value(settings, "ai_enabled", "AI_ENABLED", env, False))
     provider_name = str(_value(settings, "ai_provider", "AI_PROVIDER", env, "fallback"))
+    max_tokens = _as_positive_int(
+        _value(settings, "ai_max_tokens", "AI_MAX_TOKENS", env, 320),
+        default=320,
+    )
+    temperature = _as_float(
+        _value(settings, "ai_temperature", "AI_TEMPERATURE", env, 0),
+        default=0.0,
+    )
     if not enabled:
         return DeterministicFallbackProvider("AI отключён настройкой AI_ENABLED.")
     if provider_name == "openai":
@@ -53,7 +61,13 @@ def build_provider(
             return DeterministicFallbackProvider(
                 "Для OpenAI не задан ключ или модель; применён офлайн-разбор."
             )
-        primary = OpenAIProvider(api_key=key, model=model, client_factory=client_factory)
+        primary = OpenAIProvider(
+            api_key=key,
+            model=model,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            client_factory=client_factory,
+        )
         return ResilientProvider(primary, DeterministicFallbackProvider())
     if provider_name == "nvidia":
         key = _text(_value(settings, "nvidia_api_key", "NVIDIA_API_KEY", env))
@@ -63,10 +77,16 @@ def build_provider(
             return DeterministicFallbackProvider(
                 "Для NVIDIA NIM не заданы ключ, модель или base URL; применён офлайн-разбор."
             )
+        disable_thinking = _as_bool(
+            _value(settings, "nvidia_disable_thinking", "NVIDIA_DISABLE_THINKING", env, True)
+        )
         primary = NvidiaNimProvider(
             api_key=key,
             model=model,
             base_url=base_url,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            disable_thinking=disable_thinking,
             client_factory=client_factory,
         )
         return ResilientProvider(primary, DeterministicFallbackProvider())
@@ -97,6 +117,21 @@ def _as_bool(value: Any) -> bool:
     if isinstance(value, bool):
         return value
     return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _as_positive_int(value: Any, *, default: int) -> int:
+    try:
+        result = int(str(value).strip())
+    except (TypeError, ValueError):
+        return default
+    return result if result > 0 else default
+
+
+def _as_float(value: Any, *, default: float) -> float:
+    try:
+        return float(str(value).strip())
+    except (TypeError, ValueError):
+        return default
 
 
 def _text(value: Any) -> str | None:

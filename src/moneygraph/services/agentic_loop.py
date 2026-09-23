@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
+import time
 from collections import defaultdict, deque
 from collections.abc import Callable, Iterable, Mapping
 from datetime import date
+from hashlib import sha256
 from pathlib import Path
 from typing import Any, Literal
 from uuid import uuid4
@@ -17,11 +20,13 @@ from moneygraph.ai.base import AIProvider
 from moneygraph.ai.deterministic_fallback import DeterministicFallbackProvider
 from moneygraph.ai.factory import build_provider
 from moneygraph.repository.repositories import MoneyGraphRepository
+from moneygraph.services.ai_decision_support import assess_case, explain_proposals
 
 LOGGER = logging.getLogger("moneygraph.agentic_loop")
 SAFE_PROVIDER_NAME = re.compile(r"^[A-Za-z0-9_.-]{1,40}$")
 PUBLIC_NARRATIVE_PROVIDERS = frozenset({"openai", "nvidia_nim"})
 MAX_AI_NARRATIVE_LENGTH = 1_200
+DEFAULT_AI_MIN_PRIORITY_SCORE = 0.55
 ACTION_ORDER = (
     "prepare_aml_review_draft",
     "build_money_route",
@@ -37,6 +42,15 @@ class AgenticValidationError(ValueError):
     """Raised when a replay or decision violates the capability contract."""
 
 
+def _priority_threshold_from_env() -> float:
+    raw = os.getenv("AGENTIC_AI_MIN_PRIORITY_SCORE", str(DEFAULT_AI_MIN_PRIORITY_SCORE))
+    try:
+        value = float(raw)
+    except ValueError:
+        return DEFAULT_AI_MIN_PRIORITY_SCORE
+    return min(1.0, max(0.0, value))
+
+
 class AgenticLoopService:
     """Deterministic, human-approved AML copilot over an honest day-level replay."""
 
@@ -48,6 +62,7 @@ class AgenticLoopService:
         actor: str,
         ai_enabled: bool | None = None,
         narrative_provider: AIProvider | None = None,
+        ai_min_priority_score: float | None = None,
     ) -> None:
         self._repository = repository
         self._data_dir = Path(data_dir)
@@ -63,6 +78,12 @@ class AgenticLoopService:
             if enabled and not isinstance(configured, DeterministicFallbackProvider)
             else None
         )
+        self._ai_min_priority_score = (
+            _priority_threshold_from_env()
+            if ai_min_priority_score is None
+            else ai_min_priority_score
+        )
+        self._narrative_cache: dict[str, dict[str, str]] = {}
 
     @property
     def narrative_enabled(self) -> bool:
@@ -79,6 +100,12 @@ class AgenticLoopService:
             return None
         name = provider.name
         return name if name in PUBLIC_NARRATIVE_PROVIDERS else None
+
+    @property
+    def ai_status(self) -> dict[str, Any]:
+        from moneygraph.ai.factory import provider_status
+
+        return provider_status(self._narrative_provider)
 
     def run_scan(
         self,
@@ -109,7 +136,11 @@ class AgenticLoopService:
         alerts.sort(key=lambda item: (-float(item["priority_score"]), str(item["gid"])))
         selected = alerts[:limit]
         # One grounded narrative per scan caps remote requests and leaves rule outputs intact.
-        if selected and self._narrative_provider is not None:
+        if (
+            selected
+            and self._narrative_provider is not None
+            and float(selected[0]["priority_score"]) >= self._ai_min_priority_score
+        ):
             selected[0] = self._with_optional_narrative(selected[0])
         summary = {
             "transactions_seen": len(historical),
@@ -140,6 +171,19 @@ class AgenticLoopService:
         provider = self._narrative_provider
         if provider is None:
             return alert
+        if callable(getattr(provider, "assess_alert", None)):
+            return assess_case(provider, alert)
+        cache_key = self._narrative_cache_key(alert, provider.name)
+        if cache_key in self._narrative_cache:
+            cached = self._narrative_cache[cache_key]
+            return {
+                **alert,
+                "facts": {
+                    **alert["facts"],
+                    "ai_narrative": cached["narrative"],
+                    "ai_provider": cached["provider"],
+                },
+            }
         try:
             # The builder whitelists numeric facts and rules; no payer list or rows leave here.
             result = provider.answer(build_agentic_explanation_prompt(alert), None)
@@ -152,6 +196,10 @@ class AgenticLoopService:
         provider_name = str(result.get("provider", ""))
         if not narrative or not SAFE_PROVIDER_NAME.fullmatch(provider_name):
             return alert
+        self._narrative_cache[cache_key] = {
+            "narrative": narrative,
+            "provider": provider_name,
+        }
         return {
             **alert,
             "facts": {
@@ -161,11 +209,34 @@ class AgenticLoopService:
             },
         }
 
+    @staticmethod
+    def _narrative_cache_key(alert: Mapping[str, Any], provider_name: str) -> str:
+        payload = {
+            "provider": provider_name,
+            "gid": alert.get("gid"),
+            "rule_keys": alert.get("rule_keys"),
+            "facts": {
+                key: value
+                for key, value in dict(alert.get("facts", {})).items()
+                if key not in {"ai_narrative", "ai_provider"}
+            },
+        }
+        encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str)
+        return sha256(encoded.encode("utf-8")).hexdigest()
+
     def get_scan(self, scan_id: str) -> dict[str, Any]:
         return self._repository.get_monitoring_scan(scan_id)
 
     def propose_actions(self, alert_id: str) -> dict[str, Any]:
         alert = self._repository.get_monitoring_alert(alert_id)
+        return self._repository.create_action_proposals(
+            alert_id=alert_id,
+            proposals=self._proposals_for(alert),
+            actor="copilot",
+        )
+
+    @staticmethod
+    def _proposals_for(alert: Mapping[str, Any]) -> list[dict[str, Any]]:
         facts = alert["facts"]
         rule_count = len(alert["rule_keys"])
         proposals = [
@@ -208,11 +279,29 @@ class AgenticLoopService:
                 ),
             },
         ]
-        return self._repository.create_action_proposals(
-            alert_id=alert_id,
-            proposals=proposals,
-            actor="copilot",
+        return explain_proposals(proposals, facts)
+
+    def enrich_next_pending(self) -> bool:
+        """Upgrade one historical pending case automatically, without changing decisions."""
+        if not callable(getattr(self._narrative_provider, "assess_alert", None)):
+            return False
+        pending = [
+            alert
+            for scan in self._repository.list_auto_monitoring_scans()
+            for alert in scan["alerts"]
+            if float(alert["priority_score"]) >= self._ai_min_priority_score
+            and not alert["facts"].get("ai_assessment")
+            and float(alert["facts"].get("ai_retry_after", 0)) < time.time()
+            and all(action["status"] == "proposed" for action in alert["actions"])
+        ]
+        if not pending:
+            return False
+        alert = max(pending, key=lambda item: float(item["priority_score"]))
+        enriched = self._with_optional_narrative(alert)
+        self._repository.update_alert_assessment(
+            str(alert["id"]), enriched["facts"], self._proposals_for(enriched),
         )
+        return True
 
     def decide_and_execute(
         self,

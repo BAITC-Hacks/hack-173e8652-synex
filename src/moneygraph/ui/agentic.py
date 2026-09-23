@@ -10,6 +10,7 @@ from uuid import uuid4
 
 import streamlit as st
 
+from moneygraph.ui.ai_runtime import assessment_view, render_ai_runtime, render_assessment
 from moneygraph.ui.client import APIClient, APIClientError
 from moneygraph.ui.graph import build_ego_figure
 from moneygraph.ui.helpers import format_kzt
@@ -46,6 +47,11 @@ def render_agentic_loop(client: APIClient) -> None:
 
     monitoring = _api_call(client.agentic_monitoring)
     monitoring = dict(monitoring) if isinstance(monitoring, Mapping) else {}
+    runtime = monitoring.get("ai_runtime")
+    if not isinstance(runtime, Mapping):
+        health = _api_call(client.health)
+        runtime = health.get("ai_runtime", {}) if isinstance(health, Mapping) else {}
+    render_ai_runtime(runtime if isinstance(runtime, Mapping) else {})
     _auto_focus(monitoring)
     monitoring_tab, alert_tab, support_tab, execution_tab = st.tabs(TAB_LABELS)
     with monitoring_tab:
@@ -113,6 +119,7 @@ def _auto_focus(monitoring: Mapping[str, Any]) -> None:
         )
         if alert.get("explanation"):
             st.write(str(alert["explanation"]))
+        render_assessment(facts, compact=True)
         if actions:
             st.markdown("**Уже подготовлены три следующих шага:**")
             st.write(" · ".join(str(action.get("title", _action_key(action))) for action in actions))
@@ -300,8 +307,9 @@ def _render_alert(alerts: list[dict[str, Any]]) -> dict[str, Any]:
     explanation = alert.get("explanation", alert.get("summary"))
     if explanation:
         st.markdown(f"**Объяснение:** {explanation}")
+    render_assessment(facts)
     ai_narrative = facts.get("ai_narrative")
-    if isinstance(ai_narrative, str) and ai_narrative.strip():
+    if assessment_view(facts) is None and isinstance(ai_narrative, str) and ai_narrative.strip():
         provider = str(facts.get("ai_provider", "configured LLM"))
         st.info(f"Дополнительная формулировка {provider}: {ai_narrative[:1200]}")
         st.caption("Проверьте формулировку ИИ по числам и исходным операциям.")
@@ -357,6 +365,8 @@ def _render_decision_support(client: APIClient, alert: Mapping[str, Any]) -> lis
     if len(actions) != 3:
         st.warning(f"API вернул {len(actions)} безопасных варианта(ов) вместо 3.")
     columns = st.columns(3)
+    facts = alert.get("facts", {})
+    assessment = assessment_view(facts) if isinstance(facts, Mapping) else None
     for index, (column, action) in enumerate(zip(columns, actions, strict=False), start=1):
         with column, st.container(border=True):
             st.markdown(f"**Вариант {chr(64 + index)}**")
@@ -364,6 +374,13 @@ def _render_decision_support(client: APIClient, alert: Mapping[str, Any]) -> lis
             score = _score(action.get("recommendation_score", action.get("score")))
             st.metric("Поддержка признаками", f"{score:.0%}")
             st.write(str(action.get("rationale", "Обоснование не передано.")))
+            if assessment and str(action.get("rationale", "")).startswith("OpenAI ·"):
+                st.caption("Обоснование и порядок предложены OpenAI; значения фактов добавлены сервером.")
+                evidence = assessment["actions"].get(_action_key(action), {}).get("evidence_keys", [])
+                if evidence:
+                    st.caption("Ссылки на признаки: " + ", ".join(evidence))
+            else:
+                st.caption("Источник обоснования: детерминированные правила.")
             st.caption(str(action.get("expected_outcome", "Ожидаемый результат не передан.")))
             st.code(_action_key(action), language=None)
     return actions

@@ -248,6 +248,7 @@ def _narrative_service(
     provider: AIProvider,
     *,
     ai_enabled: bool,
+    ai_min_priority_score: float | None = None,
 ) -> AgenticLoopService:
     database = Database(f"sqlite:///{tmp_path / 'narrative.db'}")
     database.create_schema()
@@ -257,6 +258,7 @@ def _narrative_service(
         actor="analyst-a",
         ai_enabled=ai_enabled,
         narrative_provider=provider,
+        ai_min_priority_score=ai_min_priority_score,
     )
 
 
@@ -309,6 +311,35 @@ def test_optional_llm_narrative_is_bounded_to_top_alert_and_safe_numeric_prompt(
     assert all("ai_narrative" not in alert["facts"] for alert in scan["alerts"][1:])
 
 
+def test_optional_llm_narrative_is_cached_for_repeated_alerts(tmp_path: Path) -> None:
+    provider = _NarrativeProvider()
+    service = _narrative_service(tmp_path, provider, ai_enabled=True)
+
+    first = service.run_scan(date(2026, 7, 2), limit=20)
+    second = service.run_scan(date(2026, 7, 2), limit=20)
+
+    assert len(provider.calls) == 1
+    assert first["alerts"][0]["facts"]["ai_narrative"]
+    assert second["alerts"][0]["facts"]["ai_narrative"] == first["alerts"][0]["facts"][
+        "ai_narrative"
+    ]
+
+
+def test_optional_llm_narrative_respects_priority_threshold(tmp_path: Path) -> None:
+    provider = _NarrativeProvider()
+    service = _narrative_service(
+        tmp_path,
+        provider,
+        ai_enabled=True,
+        ai_min_priority_score=0.99,
+    )
+
+    scan = service.run_scan(date(2026, 7, 2), limit=20)
+
+    assert provider.calls == []
+    assert "ai_narrative" not in scan["alerts"][0]["facts"]
+
+
 @pytest.mark.parametrize("mode", ["disabled", "error", "fallback"])
 def test_optional_llm_narrative_never_breaks_deterministic_scan(
     agentic_service: AgenticLoopService,
@@ -325,3 +356,64 @@ def test_optional_llm_narrative_never_breaks_deterministic_scan(
     assert "ai_narrative" not in top["facts"]
     assert top["explanation"].startswith(f"Узел {top['gid']}")
     assert top["priority_score"] > 0
+
+
+class _AssessmentProvider(_NarrativeProvider):
+    name = "openai"
+
+    def assess_alert(self, alert: object) -> AIResult:
+        self.calls.append(("assessment", alert))
+        return {
+            "answer": "Проверьте концентрацию переводов.",
+            "provider": "openai",
+            "model": "fixture-model",
+            "fallback": False,
+            "tools_used": [],
+            "limitations": [],
+            "assessment": {
+                "summary": "Проверьте концентрацию переводов.",
+                "limitations": ["Доступны только календарные даты."],
+                "actions": [
+                    {"action_key": key, "rationale": f"Проверить гипотезу: {key}",
+                     "evidence_keys": ["daily_unique_payers"]}
+                    for key in (
+                        "build_money_route", "prepare_aml_review_draft", "create_local_watchlist"
+                    )
+                ],
+            },
+        }
+
+
+def test_structured_ai_drives_rationale_but_never_executes(
+    agentic_service: AgenticLoopService, tmp_path: Path,
+) -> None:
+    provider = _AssessmentProvider()
+    service = _narrative_service(tmp_path, provider, ai_enabled=True)
+    scan = service.run_scan(date(2026, 7, 2))
+    alert = scan["alerts"][0]
+    assert alert["facts"]["ai_assessment"]["summary"] == "Проверьте концентрацию переводов."
+    assert alert["facts"]["ai_model"] == "fixture-model"
+    actions = service.propose_actions(alert["id"])["actions"]
+    assert all("OpenAI ·" in item["rationale"] for item in actions)
+    assert all("daily_unique_payers=8" in item["rationale"] for item in actions)
+    assert all(item["status"] == "proposed" for item in actions)
+    events = service.list_audit_events(limit=100, offset=0)["items"]
+    assert "ai.assessment_completed" in {item["action"] for item in events}
+    assert "tool.executed" not in {item["action"] for item in events}
+
+
+def test_existing_pending_alert_is_enriched_without_changing_action_ids(
+    agentic_service: AgenticLoopService, tmp_path: Path,
+) -> None:
+    provider = _AssessmentProvider()
+    offline = _narrative_service(tmp_path, provider, ai_enabled=False)
+    scan = offline.run_scan(date(2026, 7, 2), actor="auto-monitor")
+    alert = scan["alerts"][0]
+    before = offline.propose_actions(alert["id"])["actions"]
+    service = _narrative_service(tmp_path, provider, ai_enabled=True)
+    assert service.enrich_next_pending() is True
+    after = service.propose_actions(alert["id"])["actions"]
+    assert {item["id"] for item in before} == {item["id"] for item in after}
+    assert all("OpenAI ·" in item["rationale"] for item in after)
+    assert service.enrich_next_pending() is False
+    assert len(provider.calls) == 1

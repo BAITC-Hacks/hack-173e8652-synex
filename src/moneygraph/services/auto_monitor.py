@@ -31,6 +31,7 @@ class AgenticAutoMonitor:
         self._enabled = enabled
         self._cadence_seconds = cadence_seconds
         self._lock = RLock()
+        self._tick_lock = RLock()
         self._stop = asyncio.Event()
         self._state = "starting" if enabled else "disabled"
         self._last_error: str | None = None
@@ -42,7 +43,7 @@ class AgenticAutoMonitor:
 
         if not self._enabled:
             return None
-        with self._lock:
+        with self._tick_lock:
             available_days, transaction_count = self._service.available_days()
             self._total_days = len(available_days)
             self._transactions_in_source = transaction_count
@@ -55,7 +56,7 @@ class AgenticAutoMonitor:
             completed = {date.fromisoformat(str(scan["replay_date"])) for scan in scans}
             next_day = next((day for day in available_days if day not in completed), None)
             if next_day is None:
-                self._state = "caught_up"
+                self._state = "enriching" if self._service.enrich_next_pending() else "caught_up"
                 self._last_error = None
                 return None
 
@@ -125,6 +126,7 @@ class AgenticAutoMonitor:
                 "last_error": self._last_error,
                 "simulation": True,
                 "source_time_granularity": "day",
+                "ai_runtime": self._service.ai_status,
             }
 
     async def run(self) -> None:

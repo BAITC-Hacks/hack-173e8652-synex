@@ -5,6 +5,7 @@ import hashlib
 import io
 import json
 import math
+import re
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from datetime import UTC, date, datetime
 from typing import Any, Literal, cast
@@ -52,6 +53,31 @@ AGENTIC_AUDIT_ACTIONS = frozenset(
         "action.rejected",
         "action.failed",
         "tool.executed",
+        "ai.assessment_completed",
+        "ai.assessment_fallback",
+    }
+)
+AI_ASSESSMENT_FIELDS = frozenset(
+    {
+        "ai_assessment",
+        "ai_narrative",
+        "ai_provider",
+        "ai_model",
+        "ai_status",
+        "ai_cached",
+        "ai_retry_after",
+        "ai_usage",
+    }
+)
+AI_ASSESSMENT_STATUSES = frozenset(
+    {
+        "success",
+        "cache_hit",
+        "budget_exhausted",
+        "in_flight",
+        "cooldown",
+        "state_unavailable",
+        "provider_unavailable",
     }
 )
 
@@ -533,6 +559,7 @@ class MoneyGraphRepository:
                 entity_type=entity_type,
                 entity_id=entity_id,
                 details=_json_safe(dict(details)),
+                created_at=datetime.now(UTC),
             )
         )
 
@@ -600,7 +627,48 @@ class MoneyGraphRepository:
                     entity_id=alert.id,
                     details={"scan_id": scan_id, "gid": alert.gid, "rule_keys": alert.rule_keys},
                 )
+                self._add_assessment_audit(session, alert.id, alert.facts)
         return self.get_monitoring_scan(scan_id)
+
+    @classmethod
+    def _add_assessment_audit(
+        cls, session: Session, alert_id: str, facts: Mapping[str, Any]
+    ) -> None:
+        if "ai_status" not in facts:
+            return
+        status = str(facts["ai_status"])
+        provider = str(facts.get("ai_provider", ""))
+        model = str(facts.get("ai_model", ""))
+        details: dict[str, Any] = {
+            "provider": provider
+            if provider in {"openai", "nvidia_nim", "deterministic_fallback"}
+            else "unknown",
+            "model": model
+            if re.fullmatch(r"(?:gpt-|o[134](?:-|$)|nvidia/|meta/)[\w./:-]{0,100}", model)
+            else "unknown",
+            "status": status if status in AI_ASSESSMENT_STATUSES else "unknown",
+            "cached": facts.get("ai_cached") is True,
+        }
+        usage = facts.get("ai_usage", {})
+        if isinstance(usage, Mapping):
+            details = {
+                **details,
+                **{
+                    key: usage[key]
+                    for key in ("input_tokens", "output_tokens")
+                    if type(usage.get(key)) is int and 0 <= usage[key] <= 1_000_000_000
+                },
+            }
+        cls._add_audit(
+            session,
+            actor="ai-orchestrator",
+            action="ai.assessment_completed"
+            if status in {"success", "cache_hit"}
+            else "ai.assessment_fallback",
+            entity_type="monitoring_alert",
+            entity_id=alert_id,
+            details=details,
+        )
 
     @staticmethod
     def _monitoring_alert_model(scan_id: str, alert_data: Mapping[str, Any]) -> MonitoringAlert:
@@ -679,6 +747,51 @@ class MoneyGraphRepository:
             result = self._alert_dict(alert)
             result["replay_date"] = alert.scan.replay_date.isoformat()
             return result
+
+    def update_alert_assessment(
+        self,
+        alert_id: str,
+        facts: Mapping[str, Any],
+        proposals: Sequence[Mapping[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        """Enrich an undecided case without changing evidence or a human's decision."""
+
+        if proposals is not None:
+            keys = [str(proposal.get("action_key", "")) for proposal in proposals]
+            if len(keys) != 3 or set(keys) != ALLOWED_AGENTIC_ACTIONS:
+                raise ValueError(
+                    "Action proposals must contain exactly the three allowlisted actions"
+                )
+        enrichment = _json_safe(
+            {key: value for key, value in facts.items() if key in AI_ASSESSMENT_FIELDS}
+        )
+        with self._session_factory.begin() as session:
+            # Acquire SQLite's writer lock before reading the actions. A human decision
+            # then either precedes this transaction or waits until enrichment commits.
+            claim = session.execute(
+                update(MonitoringAlert)
+                .where(MonitoringAlert.id == alert_id)
+                .values(facts=MonitoringAlert.facts)
+            )
+            if cast(CursorResult[Any], claim).rowcount != 1:
+                raise MonitoringAlertNotFoundError(alert_id)
+            alert = session.scalar(
+                select(MonitoringAlert)
+                .where(MonitoringAlert.id == alert_id)
+                .options(selectinload(MonitoringAlert.actions))
+            )
+            assert alert is not None  # The matching row is locked by the update above.
+            if not any(action.status != "proposed" for action in alert.actions):
+                alert.facts = {**alert.facts, **enrichment}
+                rationale_by_key = {
+                    str(item["action_key"]): str(item["rationale"])[:2_000]
+                    for item in proposals or ()
+                }
+                for action in alert.actions:
+                    if action.action_key in rationale_by_key:
+                        action.rationale = rationale_by_key[action.action_key]
+                self._add_assessment_audit(session, alert.id, enrichment)
+        return self.get_monitoring_alert(alert_id)
 
     @classmethod
     def _scan_dict(cls, scan: MonitoringScan) -> dict[str, Any]:
