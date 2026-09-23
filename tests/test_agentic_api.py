@@ -48,6 +48,7 @@ def client(tmp_path: Path) -> TestClient:
         data_dir=data_dir,
         out_dir=tmp_path / "out",
         artifacts_dir=tmp_path / "artifacts",
+        agentic_auto_monitor_enabled=False,
     )
     with TestClient(create_app(settings)) as test_client:
         yield test_client

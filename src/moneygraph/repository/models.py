@@ -162,6 +162,15 @@ class MonitoringScan(Base):
     )
 
 
+class AutoMonitorClaim(Base):
+    """One durable claim per source date across API workers and restarts."""
+
+    __tablename__ = "auto_monitor_claims"
+
+    replay_date: Mapped[date] = mapped_column(Date, primary_key=True)
+    scan_id: Mapped[str] = mapped_column(String(36), nullable=False)
+
+
 class MonitoringAlert(Base):
     __tablename__ = "monitoring_alerts"
 

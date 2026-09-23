@@ -8,6 +8,7 @@ from unittest.mock import patch
 import httpx
 from streamlit.testing.v1 import AppTest
 
+from moneygraph.ui.agentic import _route_figure_payload
 from moneygraph.ui.client import APIClient
 
 TAB_LABELS = [
@@ -41,6 +42,7 @@ def test_agentic_api_client_preserves_the_versioned_request_contract() -> None:
         idempotency_key="demo-decision-001",
     )
     audit = client.agentic_audit(limit=75, offset=25)
+    client.agentic_monitoring()
 
     assert calls[0][:3] == (
         "POST",
@@ -65,10 +67,12 @@ def test_agentic_api_client_preserves_the_versioned_request_contract() -> None:
     assert calls[4][0:2] == ("GET", "/api/v1/agentic/audit")
     assert calls[4][2] == {}
     assert audit == []
+    assert calls[5][0:2] == ("GET", "/api/v1/agentic/monitoring")
 
 
 class _AgenticFakeClient:
     decisions: ClassVar[list[dict[str, object]]] = []
+    auto_monitoring: ClassVar[bool] = False
 
     def __init__(self, *_: object, **__: object) -> None:
         self.base_url = "http://fake-api"
@@ -106,6 +110,36 @@ class _AgenticFakeClient:
 
     def agentic_scan(self, *_: object, **__: object) -> dict[str, object]:
         return self.run_agentic_scan()
+
+    def agentic_monitoring(self) -> dict[str, object]:
+        if not self.auto_monitoring:
+            return {
+                "enabled": False,
+                "state": "disabled",
+                "processed_days": 0,
+                "total_days": 0,
+                "recent_alerts": [],
+                "latest_scan": None,
+            }
+        scan = self.run_agentic_scan()
+        alert = dict(scan["alerts"][0])  # type: ignore[index]
+        alert["facts"] = {
+            **alert["facts"],  # type: ignore[dict-item]
+            "ai_narrative": "Проверьте концентрацию входящего потока.",
+            "ai_provider": "test-model",
+        }
+        alert["actions"] = self.propose_agentic_actions()["actions"]
+        alert["replay_date"] = "2026-07-16"
+        scan["alerts"] = [alert]
+        return {
+            "enabled": True,
+            "state": "running",
+            "cadence_seconds": 2,
+            "processed_days": 1,
+            "total_days": 31,
+            "recent_alerts": [alert],
+            "latest_scan": scan,
+        }
 
     def propose_agentic_actions(self, *_: object, **__: object) -> dict[str, object]:
         return {
@@ -188,10 +222,6 @@ def _button(app: AppTest, label: str):  # type: ignore[no-untyped-def]
     return next(button for button in app.button if button.label == label)
 
 
-def _text_input(app: AppTest, label: str):  # type: ignore[no-untyped-def]
-    return next(text_input for text_input in app.text_input if text_input.label == label)
-
-
 def _agentic_app() -> AppTest:
     app_path = Path(__file__).parents[1] / "src/moneygraph/ui/app.py"
     return AppTest.from_file(app_path, default_timeout=10)
@@ -199,12 +229,15 @@ def _agentic_app() -> AppTest:
 
 def test_agentic_loop_renders_four_ordered_tabs_and_day_level_safety_copy() -> None:
     _AgenticFakeClient.decisions = []
+    _AgenticFakeClient.auto_monitoring = False
     with patch("moneygraph.ui.client.APIClient", _AgenticFakeClient):
         app = _agentic_app().run()
 
     assert not app.exception
     assert [tab.label for tab in app.tabs] == TAB_LABELS
-    visible = " ".join(element.value for element in [*app.markdown, *app.caption, *app.info])
+    visible = " ".join(
+        element.value for element in [*app.markdown, *app.caption, *app.info, *app.success]
+    )
     assert "календарн" in visible.lower()
     assert "не блокир" in visible.lower()
     assert "≥ 8" in visible
@@ -214,6 +247,7 @@ def test_agentic_loop_renders_four_ordered_tabs_and_day_level_safety_copy() -> N
 
 def test_agentic_loop_requires_explicit_human_approval_before_execution() -> None:
     _AgenticFakeClient.decisions = []
+    _AgenticFakeClient.auto_monitoring = False
     with patch("moneygraph.ui.client.APIClient", _AgenticFakeClient):
         app = _agentic_app().run()
         _button(app, "Запустить дневной replay").click().run()
@@ -222,9 +256,10 @@ def test_agentic_loop_requires_explicit_human_approval_before_execution() -> Non
         assert len(_AgenticFakeClient.decisions) == 0
         approve = _button(app, "Approve и исполнить")
         assert approve.disabled
+        assert not any(item.label == "Контрольная фраза" for item in app.text_input)
 
         app.checkbox[0].check().run()
-        _text_input(app, "Контрольная фраза").set_value("APPROVE").run()
+        assert not _button(app, "Approve и исполнить").disabled
         _button(app, "Approve и исполнить").click().run()
 
     assert len(_AgenticFakeClient.decisions) == 1
@@ -236,6 +271,7 @@ def test_agentic_loop_requires_explicit_human_approval_before_execution() -> Non
 
 def test_agentic_loop_rejects_without_running_an_execution() -> None:
     _AgenticFakeClient.decisions = []
+    _AgenticFakeClient.auto_monitoring = False
     with patch("moneygraph.ui.client.APIClient", _AgenticFakeClient):
         app = _agentic_app().run()
         _button(app, "Запустить дневной replay").click().run()
@@ -247,3 +283,97 @@ def test_agentic_loop_rejects_without_running_an_execution() -> None:
     assert _AgenticFakeClient.decisions[0]["confirmation"] is None
     assert not any("case-001" in str(item.value) for item in app.json)
     assert not any(button.label == "Approve и исполнить" for button in app.button)
+
+
+def test_autonomous_feed_shows_alert_and_proposals_without_analyst_click() -> None:
+    _AgenticFakeClient.decisions = []
+    _AgenticFakeClient.auto_monitoring = True
+    with patch("moneygraph.ui.client.APIClient", _AgenticFakeClient):
+        app = _agentic_app().run()
+
+    assert not app.exception
+    visible = " ".join(
+        element.value for element in [*app.markdown, *app.caption, *app.info, *app.success]
+    )
+    assert "1 из 31" in visible
+    assert "Узел получил средства от 11 разных плательщиков" in visible
+    assert any(metric.label == "Последний день" for metric in app.metric)
+    assert "Дата alert: 2026-07-16" in visible
+    assert "Дополнительная формулировка test-model" in visible
+    assert "Вариант A" in visible
+    assert "Вариант B" in visible
+    assert "Вариант C" in visible
+    assert _AgenticFakeClient.decisions == []
+    assert _button(app, "Approve и исполнить").disabled
+
+
+def test_approved_route_is_bounded_before_drawing() -> None:
+    nodes = [f"gid-{index}" for index in range(100)]
+    edges = [
+        {"src": "gid-0", "dst": f"gid-{index}", "sum_kzt": 1000}
+        for index in range(1, 100)
+    ]
+    result = _route_figure_payload({"target_gid": "gid-0", "nodes": nodes, "edges": edges})
+
+    assert result["root_gid"] == "gid-0"
+    assert len(result["nodes"]) == 80
+    assert len(result["edges"]) == 79
+
+
+def test_receipt_is_visible_only_for_the_selected_action() -> None:
+    _AgenticFakeClient.decisions = []
+    _AgenticFakeClient.auto_monitoring = True
+    with patch("moneygraph.ui.client.APIClient", _AgenticFakeClient):
+        app = _agentic_app().run()
+        app.checkbox[0].check().run()
+        _button(app, "Approve и исполнить").click().run()
+        assert any("case-001" in str(item.value) for item in app.json)
+
+        action_radio = next(radio for radio in app.radio if radio.label == "Выбранное действие")
+        action_radio.set_value("action-002").run()
+
+    assert not any("case-001" in str(item.value) for item in app.json)
+
+
+def test_priority_case_is_selected_without_manual_scan_or_proposal_request() -> None:
+    _AgenticFakeClient.decisions = []
+    _AgenticFakeClient.auto_monitoring = True
+    payload = _AgenticFakeClient().agentic_monitoring()
+    priority = dict(payload["recent_alerts"][0])  # type: ignore[index]
+    priority.update(
+        {
+            "id": "alert-priority",
+            "gid": "001000000000000999",
+            "replay_date": "2026-07-03",
+            "priority_score": 0.99,
+            "explanation": "Приоритетный узел выбран системой автоматически.",
+        }
+    )
+    priority["actions"] = [
+        {**action, "id": f"priority-{index}", "alert_id": "alert-priority"}
+        for index, action in enumerate(priority["actions"], start=1)  # type: ignore[union-attr]
+    ]
+    payload["priority_queue"] = [priority]
+    payload["queue_size"] = 1
+
+    class PriorityClient(_AgenticFakeClient):
+        def agentic_monitoring(self) -> dict[str, object]:
+            return payload
+
+        def run_agentic_scan(self, *_: object, **__: object) -> dict[str, object]:
+            raise AssertionError("The landing must not require a manual scan")
+
+        def propose_agentic_actions(self, *_: object, **__: object) -> dict[str, object]:
+            raise AssertionError("Prepared actions must be shown without a manual request")
+
+    with patch("moneygraph.ui.client.APIClient", PriorityClient):
+        app = _agentic_app().run()
+
+    assert not app.exception
+    visible = " ".join(
+        element.value for element in [*app.markdown, *app.caption, *app.info, *app.success]
+    )
+    assert "Приоритетный узел выбран системой автоматически" in visible
+    assert "001000000000000999" in visible
+    assert "Следующий кейс для проверки" in visible
+    assert any(expander.label == "Ручной replay (диагностика)" for expander in app.expander)

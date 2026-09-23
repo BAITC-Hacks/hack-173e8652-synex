@@ -51,6 +51,8 @@ dev: ## Start API and UI together; Ctrl-C stops both processes.
 	@set -eu; \
 	DATA_DIR="$(DATA_DIR)" OUT_DIR="$(OUT_DIR)" ARTIFACTS_DIR="$(ARTIFACTS_DIR)" \
 	DATABASE_URL="$(DATABASE_URL)" \
+	AGENTIC_AUTO_MONITOR_ENABLED="$${AGENTIC_AUTO_MONITOR_ENABLED:-true}" \
+	AGENTIC_AUTO_MONITOR_CADENCE_SECONDS="$${AGENTIC_AUTO_MONITOR_CADENCE_SECONDS:-2}" \
 		$(PYTHON) -m uvicorn moneygraph.api.main:app --host "$(HOST)" --port "$(API_PORT)" & \
 	api_pid=$$!; \
 	trap 'kill "$$api_pid" 2>/dev/null || true; wait "$$api_pid" 2>/dev/null || true' EXIT INT TERM; \

@@ -194,6 +194,7 @@ health = get_json(f"{api_url}/health")
 openapi = get_json(f"{api_url}/openapi.json")
 summary = get_json(f"{api_url}/api/v1/summary")
 top_nodes = get_json(f"{api_url}/api/v1/top-nodes?limit=2")
+monitoring = get_json(f"{api_url}/api/v1/agentic/monitoring")
 
 paths = openapi.get("paths", {}) if isinstance(openapi, dict) else {}
 required_paths = {
@@ -201,6 +202,7 @@ required_paths = {
     "/api/v1/summary",
     "/api/v1/top-nodes",
     "/api/v1/agentic/scans",
+    "/api/v1/agentic/monitoring",
     "/api/v1/agentic/alerts/{alert_id}/proposals",
     "/api/v1/agentic/actions/{action_id}/decision",
     "/api/v1/agentic/audit",
@@ -214,6 +216,9 @@ if not isinstance(summary, dict):
     raise RuntimeError("Summary response must be a JSON object")
 if not isinstance(top_nodes, (dict, list)):
     raise RuntimeError("Top nodes response must be a JSON object or array")
+monitoring_data = unwrap_data(monitoring)
+if not isinstance(monitoring_data, dict) or not isinstance(monitoring_data.get("enabled"), bool):
+    raise RuntimeError("Agentic monitoring response must report its enabled state")
 
 gids = extract_top_gids(top_nodes)
 common_receivers = post_json(

@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import logging
+import os
+import re
 from collections import defaultdict, deque
 from collections.abc import Callable, Iterable, Mapping
 from datetime import date
@@ -9,8 +12,15 @@ from uuid import uuid4
 
 import pandas as pd
 
+from moneygraph.ai.agentic_prompts import build_agentic_explanation_prompt
+from moneygraph.ai.base import AIProvider
+from moneygraph.ai.deterministic_fallback import DeterministicFallbackProvider
+from moneygraph.ai.factory import build_provider
 from moneygraph.repository.repositories import MoneyGraphRepository
 
+LOGGER = logging.getLogger("moneygraph.agentic_loop")
+SAFE_PROVIDER_NAME = re.compile(r"^[A-Za-z0-9_.-]{1,40}$")
+MAX_AI_NARRATIVE_LENGTH = 1_200
 ACTION_ORDER = (
     "prepare_aml_review_draft",
     "build_money_route",
@@ -35,10 +45,23 @@ class AgenticLoopService:
         data_dir: Path,
         *,
         actor: str,
+        ai_enabled: bool | None = None,
+        narrative_provider: AIProvider | None = None,
     ) -> None:
         self._repository = repository
         self._data_dir = Path(data_dir)
         self._actor = actor
+        enabled = (
+            os.getenv("AI_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
+            if ai_enabled is None
+            else ai_enabled
+        )
+        configured = narrative_provider or (build_provider() if enabled else None)
+        self._narrative_provider = (
+            configured
+            if enabled and not isinstance(configured, DeterministicFallbackProvider)
+            else None
+        )
 
     def run_scan(
         self,
@@ -46,6 +69,7 @@ class AgenticLoopService:
         *,
         interval_minutes: int = 15,
         limit: int = 50,
+        actor: Literal["rules-engine", "auto-monitor"] = "rules-engine",
     ) -> dict[str, Any]:
         if not 1 <= interval_minutes <= 60:
             raise AgenticValidationError("interval_minutes must be between 1 and 60")
@@ -67,6 +91,9 @@ class AgenticLoopService:
         alerts = self._derive_alerts(historical, daily)
         alerts.sort(key=lambda item: (-float(item["priority_score"]), str(item["gid"])))
         selected = alerts[:limit]
+        # One grounded narrative per scan caps remote requests and leaves rule outputs intact.
+        if selected and self._narrative_provider is not None:
+            selected[0] = self._with_optional_narrative(selected[0])
         summary = {
             "transactions_seen": len(historical),
             "daily_transactions": len(daily),
@@ -82,8 +109,40 @@ class AgenticLoopService:
             interval_minutes=interval_minutes,
             summary=summary,
             alerts=selected,
-            actor="rules-engine",
+            actor=actor,
         )
+
+    def available_days(self) -> tuple[list[date], int]:
+        """Read real source dates for a day-level replay, including later arrivals."""
+
+        transactions = self._load_transactions()
+        days = sorted({timestamp.date() for timestamp in transactions["date"]})
+        return days, len(transactions)
+
+    def _with_optional_narrative(self, alert: dict[str, Any]) -> dict[str, Any]:
+        provider = self._narrative_provider
+        if provider is None:
+            return alert
+        try:
+            # The builder whitelists numeric facts and rules; no payer list or rows leave here.
+            result = provider.answer(build_agentic_explanation_prompt(alert), None)
+        except Exception:
+            LOGGER.warning("Optional agentic narrative unavailable")
+            return alert
+        if result.get("fallback"):
+            return alert
+        narrative = str(result.get("answer", "")).strip()[:MAX_AI_NARRATIVE_LENGTH]
+        provider_name = str(result.get("provider", ""))
+        if not narrative or not SAFE_PROVIDER_NAME.fullmatch(provider_name):
+            return alert
+        return {
+            **alert,
+            "facts": {
+                **alert["facts"],
+                "ai_narrative": narrative,
+                "ai_provider": provider_name,
+            },
+        }
 
     def get_scan(self, scan_id: str) -> dict[str, Any]:
         return self._repository.get_monitoring_scan(scan_id)

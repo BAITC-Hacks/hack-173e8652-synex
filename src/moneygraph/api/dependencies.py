@@ -10,6 +10,7 @@ from moneygraph.repository.database import Database
 from moneygraph.repository.repositories import MoneyGraphRepository
 from moneygraph.services.agentic_loop import AgenticLoopService
 from moneygraph.services.artifacts import ArtifactStore
+from moneygraph.services.auto_monitor import AgenticAutoMonitor
 from moneygraph.services.graph_queries import GraphQueryService
 
 
@@ -21,6 +22,7 @@ class AppServices:
     artifacts: ArtifactStore
     graph: GraphQueryService
     agentic: AgenticLoopService
+    auto_monitor: AgenticAutoMonitor
 
 
 def build_services(settings: APISettings) -> AppServices:
@@ -28,16 +30,23 @@ def build_services(settings: APISettings) -> AppServices:
     database.create_schema()
     repository = MoneyGraphRepository(database.session_factory)
     artifacts = ArtifactStore(settings.out_dir, settings.artifacts_dir, settings.data_dir)
+    agentic = AgenticLoopService(
+        repository=repository,
+        data_dir=settings.data_dir,
+        actor=settings.analyst_name,
+    )
     return AppServices(
         settings=settings,
         database=database,
         repository=repository,
         artifacts=artifacts,
         graph=GraphQueryService(artifacts),
-        agentic=AgenticLoopService(
+        agentic=agentic,
+        auto_monitor=AgenticAutoMonitor(
+            service=agentic,
             repository=repository,
-            data_dir=settings.data_dir,
-            actor=settings.analyst_name,
+            enabled=settings.agentic_auto_monitor_enabled,
+            cadence_seconds=settings.agentic_auto_monitor_cadence_seconds,
         ),
     )
 

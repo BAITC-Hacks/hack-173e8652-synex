@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
@@ -36,8 +37,16 @@ def create_app(settings: APISettings | None = None) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
-        yield
-        services.database.dispose()
+        monitor_task: asyncio.Task[None] | None = None
+        if resolved.agentic_auto_monitor_enabled:
+            monitor_task = asyncio.create_task(services.auto_monitor.run())
+        try:
+            yield
+        finally:
+            services.auto_monitor.request_stop()
+            if monitor_task is not None:
+                await monitor_task
+            services.database.dispose()
 
     application = FastAPI(
         title=resolved.api_title,

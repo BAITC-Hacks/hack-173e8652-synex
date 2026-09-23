@@ -10,6 +10,13 @@ def _cors_from_env() -> tuple[str, ...]:
     return tuple(origin.strip().rstrip("/") for origin in raw.split(",") if origin.strip())
 
 
+def _auto_monitor_enabled_from_env() -> bool:
+    raw = os.getenv("AGENTIC_AUTO_MONITOR_ENABLED", "true").strip().lower()
+    if raw not in {"true", "false"}:
+        raise ValueError("AGENTIC_AUTO_MONITOR_ENABLED must be true or false")
+    return raw == "true"
+
+
 @dataclass(frozen=True, slots=True)
 class APISettings:
     """Environment-backed runtime settings with explicit test overrides."""
@@ -26,6 +33,10 @@ class APISettings:
     )
     api_title: str = "Freedom MoneyGraph AML API"
     api_version: str = "1.0.0"
+    agentic_auto_monitor_enabled: bool = field(default_factory=_auto_monitor_enabled_from_env)
+    agentic_auto_monitor_cadence_seconds: float = field(
+        default_factory=lambda: float(os.getenv("AGENTIC_AUTO_MONITOR_CADENCE_SECONDS", "2"))
+    )
 
     def __post_init__(self) -> None:
         if not self.database_url.strip():
@@ -34,3 +45,5 @@ class APISettings:
             raise ValueError("ANALYST_NAME must not be empty")
         if any(origin == "*" for origin in self.cors_origins):
             raise ValueError("CORS_ORIGINS must list explicit origins; wildcard is not allowed")
+        if not 0.05 <= self.agentic_auto_monitor_cadence_seconds <= 3_600:
+            raise ValueError("AGENTIC_AUTO_MONITOR_CADENCE_SECONDS must be between 0.05 and 3600")

@@ -174,6 +174,9 @@ class APIClient:
     def agentic_scan(self, scan_id: str) -> dict[str, Any]:
         return _mapping(self._request("GET", f"/api/v1/agentic/scans/{_gid(scan_id)}"))
 
+    def agentic_monitoring(self) -> dict[str, Any]:
+        return _mapping(self._request("GET", "/api/v1/agentic/monitoring"))
+
     def propose_agentic_actions(self, alert_id: str) -> dict[str, Any]:
         return _mapping(
             self._request(

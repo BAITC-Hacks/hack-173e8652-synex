@@ -7,6 +7,7 @@ import pandas as pd
 import pytest
 
 from moneygraph.ai.agentic_prompts import build_agentic_explanation_prompt
+from moneygraph.ai.base import AIResult
 from moneygraph.repository.database import Database
 from moneygraph.repository.repositories import IdempotencyConflictError, MoneyGraphRepository
 from moneygraph.services.agentic_loop import AgenticLoopService, AgenticValidationError
@@ -218,3 +219,81 @@ def test_missing_dataset_error_does_not_expose_the_local_path(tmp_path: Path) ->
 
     assert str(tmp_path) not in str(error.value)
     assert str(error.value) == "transactions dataset is unavailable"
+
+
+class _NarrativeProvider:
+    name = "test-model"
+
+    def __init__(self, *, fail: bool = False, fallback: bool = False) -> None:
+        self.calls: list[tuple[str, object]] = []
+        self.fail = fail
+        self.fallback = fallback
+
+    def answer(self, query: str, context: object = None) -> AIResult:
+        self.calls.append((query, context))
+        if self.fail:
+            raise RuntimeError("provider unavailable")
+        return {
+            "answer": "  Наблюдается повышенная концентрация входящих переводов. " * 30,
+            "provider": self.name,
+            "fallback": self.fallback,
+            "tools_used": [],
+            "limitations": [],
+        }
+
+
+def _narrative_service(
+    tmp_path: Path,
+    provider: _NarrativeProvider,
+    *,
+    ai_enabled: bool,
+) -> AgenticLoopService:
+    database = Database(f"sqlite:///{tmp_path / 'narrative.db'}")
+    database.create_schema()
+    return AgenticLoopService(
+        MoneyGraphRepository(database.session_factory),
+        tmp_path / "data",
+        actor="analyst-a",
+        ai_enabled=ai_enabled,
+        narrative_provider=provider,
+    )
+
+
+def test_optional_llm_narrative_is_bounded_to_top_alert_and_safe_numeric_prompt(
+    agentic_service: AgenticLoopService,
+    tmp_path: Path,
+) -> None:
+    provider = _NarrativeProvider()
+    service = _narrative_service(tmp_path, provider, ai_enabled=True)
+
+    scan = service.run_scan(date(2026, 7, 2), limit=20)
+
+    assert len(provider.calls) == 1
+    prompt, context = provider.calls[0]
+    assert context is None
+    assert "dormant-payer" not in prompt
+    assert "payer-0" not in prompt
+    assert "direct_payers" not in prompt
+    top = scan["alerts"][0]
+    assert top["facts"]["ai_provider"] == "test-model"
+    assert len(top["facts"]["ai_narrative"]) == 1200
+    assert top["facts"]["daily_unique_payers"] == 8
+    assert all("ai_narrative" not in alert["facts"] for alert in scan["alerts"][1:])
+
+
+@pytest.mark.parametrize("mode", ["disabled", "error", "fallback"])
+def test_optional_llm_narrative_never_breaks_deterministic_scan(
+    agentic_service: AgenticLoopService,
+    tmp_path: Path,
+    mode: str,
+) -> None:
+    provider = _NarrativeProvider(fail=mode == "error", fallback=mode == "fallback")
+    service = _narrative_service(tmp_path, provider, ai_enabled=mode != "disabled")
+
+    scan = service.run_scan(date(2026, 7, 2), limit=20)
+
+    assert len(provider.calls) == (0 if mode == "disabled" else 1)
+    top = scan["alerts"][0]
+    assert "ai_narrative" not in top["facts"]
+    assert top["explanation"].startswith(f"Узел {top['gid']}")
+    assert top["priority_score"] > 0

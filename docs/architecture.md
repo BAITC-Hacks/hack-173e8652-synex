@@ -16,6 +16,8 @@ flowchart LR
     UI --> API[FastAPI]
     API --> MG
     API --> LOOP[Agentic Loop service]
+    API --> SCHED[Autonomous day-replay scheduler]
+    SCHED --> LOOP
     MG --> LOOP
     LOOP --> TOOLS[Safe local tools]
     MG --> EXPORTS[CSV / Parquet / JSON]
@@ -47,11 +49,11 @@ flowchart LR
 
 ### API
 
-FastAPI предоставляет `/health`, сводку, карточки узлов, локальные графы, upstream/downstream-трассировку, common receivers, кластеры, workflow investigations и Agentic API. Последний включает запуск дневного replay, чтение scan, создание трёх предложений, решение approve/reject и чтение audit. Входные параметры валидируются Pydantic-схемами; глубина, размеры списков и число путей ограничены, чтобы циклы и ветвление графа не приводили к неограниченному обходу.
+FastAPI предоставляет `/health`, сводку, карточки узлов, локальные графы, upstream/downstream-трассировку, common receivers, кластеры, workflow investigations и Agentic API. Фоновый scheduler после старта проверяет реальные даты входного Parquet и автоматически создаёт scan, alert и три предложения. API отдаёт состояние и ленту через `GET /api/v1/agentic/monitoring`; ручной scan, решение approve/reject и audit остаются отдельными интерфейсами. Входные параметры валидируются Pydantic-схемами; глубина, размеры списков и число путей ограничены, чтобы циклы и ветвление графа не приводили к неограниченному обходу.
 
 ### Analyst UI
 
-Streamlit использует API как единственный источник изменяемого состояния. Основной workspace `Agentic Loop` состоит из четырёх вкладок: `Мониторинг`, `Alert + Explain`, `Decision Support`, `Approve → Execute → Audit`. Прежние экраны сводки, top priority, node explorer, кластеров, потоков, resilience и investigations сохранены для углубления проверки. Интерфейс намеренно не рисует весь граф по умолчанию: аналитик работает с ограниченным подграфом и переходит от причины приоритета к проверяемым связям.
+Streamlit использует API как единственный источник изменяемого состояния. Основной workspace `Agentic Loop` состоит из четырёх вкладок: `Мониторинг`, `Alert + Explain`, `Decision Support`, `Approve → Execute → Audit`; он опрашивает ленту каждые три секунды. Прежние экраны сводки, top priority, node explorer, кластеров, потоков, resilience и investigations сохранены для углубления проверки. Интерфейс намеренно не рисует весь граф по умолчанию: аналитик работает с ограниченным подграфом и переходит от причины приоритета к проверяемым связям.
 
 ### Хранилище
 
@@ -117,7 +119,7 @@ flowchart LR
 
 ### Online boundary
 
-API и UI читают результаты завершённого запуска и обслуживают ограниченные запросы расследования. Agentic monitoring не является realtime ingestion: replay вручную запускается из demo UI, а `interval_minutes` фиксирует целевую cadence без фонового scheduler. Сервис последовательно проигрывает доступные календарные дни, не заявляет внутридневную точность и не использует будущие строки как факт выбранного окна. Изменяемые пользовательские данные — scans, alerts, decisions, cases, notes, statuses и audit events — хранятся отдельно от неизменяемых входов и аналитических артефактов.
+API и UI читают результаты завершённого запуска и обслуживают ограниченные запросы расследования. Agentic monitoring не является realtime ingestion: фоновый demo scheduler самостоятельно проходит доступные календарные дни с ускоренной cadence, а `interval_minutes` относится к ручному scan. Сервис не заявляет внутридневную точность и не использует будущие строки как факт выбранного окна. Изменяемые пользовательские данные — scans, alerts, decisions, cases, notes, statuses и audit events — хранятся отдельно от неизменяемых входов и аналитических артефактов.
 
 ## Развёртывание
 

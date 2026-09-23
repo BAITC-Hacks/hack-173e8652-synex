@@ -341,6 +341,16 @@ class _FakeAppClient:
     def agentic_scan(self, *_: object, **__: object) -> dict[str, object]:
         return self.run_agentic_scan()
 
+    def agentic_monitoring(self) -> dict[str, object]:
+        return {
+            "enabled": False,
+            "state": "disabled",
+            "processed_days": 0,
+            "total_days": 0,
+            "recent_alerts": [],
+            "latest_scan": None,
+        }
+
     def propose_agentic_actions(self, *_: object, **__: object) -> dict[str, object]:
         return {"actions": []}
 

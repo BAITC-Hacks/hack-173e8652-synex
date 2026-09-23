@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 
-from sqlalchemy import Engine, create_engine, event
+from sqlalchemy import Engine, create_engine, event, insert, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -44,6 +45,36 @@ class Database:
         from moneygraph.repository import models  # noqa: F401
 
         Base.metadata.create_all(self.engine)
+        self._backfill_auto_monitor_claims()
+
+    def _backfill_auto_monitor_claims(self) -> None:
+        """Upgrade pre-claim databases without deleting duplicate historical scans."""
+
+        from moneygraph.repository.models import AutoMonitorClaim, MonitoringScan
+
+        with self.engine.begin() as connection:
+            claimed = set(connection.execute(select(AutoMonitorClaim.replay_date)).scalars())
+            scans = connection.execute(
+                select(MonitoringScan.replay_date, MonitoringScan.id)
+                .where(MonitoringScan.created_by == "auto-monitor")
+                .order_by(MonitoringScan.replay_date, MonitoringScan.created_at, MonitoringScan.id)
+            ).all()
+            seen: set[object] = set()
+            for replay_date, scan_id in scans:
+                if replay_date in seen or replay_date in claimed:
+                    continue
+                seen.add(replay_date)
+                try:
+                    with connection.begin_nested():
+                        connection.execute(
+                            insert(AutoMonitorClaim).values(
+                                replay_date=replay_date,
+                                scan_id=scan_id,
+                            )
+                        )
+                except IntegrityError:
+                    # Another worker or a previous boot already claimed this date.
+                    pass
 
     def session(self) -> Iterator[Session]:
         """Yield a transactional session for framework dependency injection."""

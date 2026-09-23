@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session, selectinload, sessionmaker
 from moneygraph.repository.models import (
     AgenticAction,
     AuditEvent,
+    AutoMonitorClaim,
     Investigation,
     InvestigationNode,
     InvestigationNote,
@@ -44,6 +45,7 @@ AGENTIC_ACTION_TITLES = {
 AGENTIC_AUDIT_ACTIONS = frozenset(
     {
         "monitor.scan_completed",
+        "monitor.scan_failed",
         "alert.created",
         "actions.proposed",
         "action.approved",
@@ -561,6 +563,9 @@ class MoneyGraphRepository:
             raise ValueError("interval_minutes must be between 1 and 1440")
         scan_id = str(uuid4())
         with self._session_factory.begin() as session:
+            if actor == "auto-monitor":
+                session.add(AutoMonitorClaim(replay_date=replay_date, scan_id=scan_id))
+                session.flush()
             session.add(
                 MonitoringScan(
                     id=scan_id,
@@ -636,6 +641,31 @@ class MoneyGraphRepository:
             if scan is None:
                 raise MonitoringScanNotFoundError(scan_id)
             return self._scan_dict(scan)
+
+    def list_auto_monitoring_scans(self) -> list[dict[str, Any]]:
+        """Return persisted automatic scans in replay order for restart-safe progress."""
+
+        with self._session_factory() as session:
+            scans = session.scalars(
+                select(MonitoringScan)
+                .where(MonitoringScan.created_by == "auto-monitor")
+                .options(selectinload(MonitoringScan.alerts).selectinload(MonitoringAlert.actions))
+                .order_by(MonitoringScan.replay_date, MonitoringScan.created_at, MonitoringScan.id)
+            ).all()
+            return [self._scan_dict(scan) for scan in scans]
+
+    def record_monitoring_failure(self, message: str) -> None:
+        """Journal an automatic scan failure without revealing source paths."""
+
+        with self._session_factory.begin() as session:
+            self._add_audit(
+                session,
+                actor="auto-monitor",
+                action="monitor.scan_failed",
+                entity_type="monitoring_source",
+                entity_id="transactions.parquet",
+                details={"message": message},
+            )
 
     def get_monitoring_alert(self, alert_id: str) -> dict[str, Any]:
         with self._session_factory() as session:

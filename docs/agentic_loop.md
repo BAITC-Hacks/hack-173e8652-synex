@@ -2,15 +2,15 @@
 
 ## CAPABILITY
 
-AML-аналитик получает единый четырёхшаговый workflow: система воспроизводимо сканирует очередное дневное окно датасета, формирует объяснимую alert-карточку, предлагает ровно три безопасных действия, а после явного approve/reject исполняет только разрешённый локальный инструмент и записывает каждый переход в append-only audit log.
+AML-аналитик получает единый четырёхшаговый workflow: фоновый сервис самостоятельно сканирует очередное дневное окно датасета, формирует объяснимую alert-карточку и ровно три безопасных предложения. После явного approve/reject он исполняет только разрешённый локальный инструмент и записывает каждый переход в audit log.
 
 ## CONSTRAINTS
 
 - Финальное решение и ответственность всегда принадлежат аналитику.
 - Ни AI, ни rules engine не блокируют клиента, перевод и счёт и не отправляют сообщение в АФМ.
-- Core monitoring, alerts и предложения работают без LLM и без сети; LLM может только расширить объяснение из allowlist-метрик.
+- Core monitoring, alerts и предложения работают без LLM и без сети. Agentic Loop использует детерминированные графовые и временные правила; при `AI_ENABLED=true` внешний LLM опционально добавляет пояснение к ведущему alert каждого scan. Он получает только разрешённые числовые признаки, не меняет score, trigger codes или набор действий; ошибка провайдера оставляет офлайн-карточку рабочей. Отдельный AI Copilot также доступен в интерфейсе.
 - Исходник имеет дневную, а не часовую гранулярность. Сигнал `dwell < 2h` недоступен и не симулируется; используется наблюдаемое перенаправление за 0–2 дня.
-- Мониторинг является честно маркированным demo replay по датам июля 2026, а не заявлением о live ingestion.
+- Мониторинг является честно маркированным автономным demo replay по датам июля 2026, а не заявлением о live ingestion. В Docker Compose и `make dev` scheduler включён; API можно запустить с `AGENTIC_AUTO_MONITOR_ENABLED=true`.
 - Разрешены только три server-owned action key: `prepare_aml_review_draft`, `build_money_route`, `create_local_watchlist`.
 - Любое действие требует явного решения `approve` или `reject`; approve дополнительно требует строки подтверждения `APPROVE`.
 - Повтор запроса с тем же idempotency key не создаёт второй кейс, draft или watchlist.
@@ -21,7 +21,8 @@ AML-аналитик получает единый четырёхшаговый 
 
 ### Actors
 
-- `rules-engine` — детерминированно сканирует дневное окно.
+- `auto-monitor` — фоново выбирает ещё не пройденную календарную дату и запускает scan.
+- `rules-engine` — детерминированно анализирует транзакции до выбранной даты.
 - `copilot` — объясняет и предлагает только allowlisted действия.
 - `analyst` — выбирает approve/reject и несёт ответственность за решение.
 - `tool-executor` — выполняет подтверждённое локальное действие.
@@ -30,7 +31,7 @@ AML-аналитик получает единый четырёхшаговый 
 
 Streamlit workspace `Agentic Loop` содержит ровно четыре вкладки:
 
-1. `Мониторинг` — interval setting, replay date, scan, alert feed.
+1. `Мониторинг` — автоматически обновляемая лента и прогресс; ручной scan для повторной проверки даты.
 2. `Alert + Explain` — факты, гипотеза, причины priority, ограничения и impact.
 3. `Decision Support` — три action cards с rationale и expected outcome.
 4. `Approve → Execute → Audit` — approve/reject, результат инструмента и журнал.
@@ -49,7 +50,7 @@ action.approved -> action.failed
 
 ### Monitoring rules
 
-Для выбранной даты replay alert создаётся, если выполняется хотя бы одно правило:
+Для очередной даты replay alert создаётся, если выполняется хотя бы одно правило:
 
 - `daily_unique_payers >= 8`;
 - `0.9 <= pass_through <= 1.1` и `fast_forward_0_2d_ratio >= 0.7`;
@@ -65,7 +66,8 @@ Alert показывает конкретные числа, исходную д�
 
 ### Interfaces
 
-- `POST /api/v1/agentic/scans`
+- `GET /api/v1/agentic/monitoring` — прогресс автономного replay и лента с предложениями.
+- `POST /api/v1/agentic/scans` — ручная проверка даты.
 - `GET /api/v1/agentic/scans/{scan_id}`
 - `POST /api/v1/agentic/alerts/{alert_id}/proposals`
 - `POST /api/v1/agentic/actions/{action_id}/decision`
@@ -91,4 +93,4 @@ No implementation blocker remains for the hackathon demo. Production rollout sti
 
 ## HANDOFF
 
-Ready for direct implementation using TDD, followed by API/UI smoke, full regression, security review and browser verification.
+Для demo фоновые шаги не требуют клика аналитика: scan, alert и предложения появляются автоматически. Граница человека начинается на approve/reject. Промышленная интеграция с потоком транзакций остаётся отдельным этапом.

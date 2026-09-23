@@ -29,7 +29,7 @@ Transactions → Graph & Temporal Rules → Explainable Alert
 
 Четыре вкладки UI соответствуют реальному рабочему циклу:
 
-1. `Мониторинг` — честный вручную запускаемый replay по календарным дням с параметром будущей cadence;
+1. `Мониторинг` — автономный replay по календарным дням с автоматически обновляемой лентой;
 2. `Alert + Explain` — факты, trigger codes и ограничения;
 3. `Decision Support` — ровно три server-owned варианта;
 4. `Approve → Execute → Audit` — human gate, безопасный результат и журнал.
@@ -55,7 +55,7 @@ Parquet → strict validation → directed graph + temporal FIFO → clusters
 
 1. **Constrained agentic loop.** AI не получает свободный доступ к инструментам: action keys заданы сервером, а исполнение невозможно без решения человека.
 2. **Объяснимый temporal graph.** Сигналы связывают направление денег, уникальных плательщиков, pass-through и перенаправление за 0–2 календарных дня.
-3. **Честная точность.** Batch replay явно помечен как simulation и в pilot запускается вручную; система не заявляет фоновой scheduler, realtime или `dwell < 2 часов` на date-only данных.
+3. **Честная точность.** Фоновый batch replay явно помечен как simulation; система не заявляет realtime или `dwell < 2 часов` на date-only данных.
 4. **Безопасное исполнение.** Доступны только локальный AML draft, bounded money route и local watchlist. Нет block, freeze или send.
 5. **Audit by design.** Scan, alert, предложения, approve/reject и execution result образуют одну проверяемую цепочку.
 6. **Graceful AI fallback.** Детерминированный core и предложения работают без внешнего LLM; провайдер может улучшить формулировку, но не изменить факт или действие.
@@ -78,7 +78,7 @@ Parquet → strict validation → directed graph + temporal FIFO → clusters
 
 ### 0:30–1:05 — мониторинг и alert
 
-Запустить replay выбранного календарного дня, открыть новый alert и показать trigger codes с фактическими метриками. Сразу отметить дневную гранулярность и отсутствие заявления о realtime.
+Показать, как автономный scheduler проходит дни исходного файла, открыть новый alert и показать trigger codes с фактическими метриками. Сразу отметить дневную гранулярность и отсутствие заявления о realtime.
 
 ### 1:05–1:45 — решение, а не только анализ
 

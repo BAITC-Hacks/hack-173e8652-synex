@@ -12,8 +12,8 @@ x-common-environment: &common-environment
   ARTIFACTS_DIR: /app/artifacts
   DATABASE_URL: sqlite:////app/state/moneygraph.db
   ANALYST_NAME: "${ANALYST_NAME:-demo-analyst}"
-  AI_ENABLED: "false"
-  AI_PROVIDER: fallback
+  AI_ENABLED: "${AI_ENABLED:-false}"
+  AI_PROVIDER: "${AI_PROVIDER:-fallback}"
   PYTHONPYCACHEPREFIX: /tmp/pycache
   HOME: /tmp/moneygraph
 
@@ -71,6 +71,13 @@ services:
     environment:
       <<: *common-environment
       CORS_ORIGINS: "${CORS_ORIGINS:-http://127.0.0.1:8501,http://localhost:8501}"
+      AGENTIC_AUTO_MONITOR_ENABLED: "${AGENTIC_AUTO_MONITOR_ENABLED:-true}"
+      AGENTIC_AUTO_MONITOR_CADENCE_SECONDS: "${AGENTIC_AUTO_MONITOR_CADENCE_SECONDS:-2}"
+      OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
+      OPENAI_MODEL: "${OPENAI_MODEL:-}"
+      NVIDIA_API_KEY: "${NVIDIA_API_KEY:-}"
+      NVIDIA_BASE_URL: "${NVIDIA_BASE_URL:-https://integrate.api.nvidia.com/v1}"
+      NVIDIA_MODEL: "${NVIDIA_MODEL:-}"
     volumes:
       - ./data:/app/data:ro
       - ./out:/app/out

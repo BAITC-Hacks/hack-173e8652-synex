@@ -27,6 +27,11 @@ IdempotencyKey = Annotated[
 ]
 
 
+@router.get("/monitoring")
+def get_monitoring_status(services: ServicesDependency) -> dict[str, Any]:
+    return {"data": services.auto_monitor.status()}
+
+
 @router.post("/scans", status_code=status.HTTP_201_CREATED)
 def create_scan(payload: AgenticScanCreate, services: ServicesDependency) -> dict[str, Any]:
     try:
