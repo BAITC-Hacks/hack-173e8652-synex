@@ -87,7 +87,7 @@ flowchart LR
 - Pipeline run хранит конфигурацию/версию и input hashes.
 - Действия с investigation сохраняют аналитика demo-session и audit event.
 - Agentic Loop добавляет события для scan, alert, proposals, approve/reject и результата исполнения.
-- Отклонённое действие не запускает tool; подтверждённое действие требует точной строки `APPROVE` и idempotency key.
+- Отклонённое действие не запускает tool; подтверждённое действие требует явного UI-подтверждения, внутреннего API confirmation token и idempotency key.
 - `ANALYST_NAME` — атрибут демо-аудита, **не механизм аутентификации**.
 
 ### Human-in-the-Loop и безопасные инструменты

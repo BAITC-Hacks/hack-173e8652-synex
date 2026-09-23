@@ -12,7 +12,7 @@ AML-аналитик получает единый четырёхшаговый 
 - Исходник имеет дневную, а не часовую гранулярность. Сигнал `dwell < 2h` недоступен и не симулируется; используется наблюдаемое перенаправление за 0–2 дня.
 - Мониторинг является честно маркированным автономным demo replay по датам июля 2026, а не заявлением о live ingestion. В Docker Compose и `make dev` scheduler включён; API можно запустить с `AGENTIC_AUTO_MONITOR_ENABLED=true`.
 - Разрешены только три server-owned action key: `prepare_aml_review_draft`, `build_money_route`, `create_local_watchlist`.
-- Любое действие требует явного решения `approve` или `reject`; approve дополнительно требует строки подтверждения `APPROVE`.
+- Любое действие требует явного решения `approve` или `reject`; в UI это чекбокс и клик аналитика, а API дополнительно принимает внутренний confirmation token `APPROVE`.
 - Повтор запроса с тем же idempotency key не создаёт второй кейс, draft или watchlist.
 - `recommendation_score` означает пригодность следующего шага, а не вероятность нарушения.
 - Все `gid` остаются непрозрачными строками; raw transactions и заметки не передаются внешнему AI.

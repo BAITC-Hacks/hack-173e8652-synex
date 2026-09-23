@@ -72,7 +72,7 @@ flowchart LR
     SCAN[Daily replay scan] --> ALERT[Explainable alert]
     ALERT --> PROPOSALS[3 allowlisted proposals]
     PROPOSALS --> REJECT[Analyst rejects]
-    PROPOSALS --> APPROVE[Analyst approves + APPROVE]
+    PROPOSALS --> APPROVE[Analyst approves in UI]
     APPROVE --> EXEC[Safe local tool]
     SCAN --> AUDIT[(Audit events)]
     ALERT --> AUDIT
@@ -139,7 +139,7 @@ API и UI читают результаты завершённого запус�
 | Объяснимость | отдельные scores ролей, числовой evidence, priority contributions | CSV, карточка узла, методология |
 | Отказоустойчивость | AI вне критического пути; явные validation failures | тесты fallback и CLI exit code |
 | Ограниченность запросов | depth/list/path limits | API validation tests |
-| Human-in-the-Loop | allowlist действий, approve/reject, confirmation `APPROVE` | API/UI tests и smoke flow |
+| Human-in-the-Loop | allowlist действий, approve/reject, UI approval плюс API confirmation token | API/UI tests и smoke flow |
 | Идемпотентность | один result на action и `Idempotency-Key` | повтор approve в integration tests |
 | Аудит | run manifest, input hashes, config/model version, case и Agentic audit events | JSON/DB export |
 | Приватность | offline core, минимизированный AI-контекст, env secrets | security review |
